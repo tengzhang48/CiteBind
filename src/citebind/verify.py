@@ -1,0 +1,584 @@
+"""The structure verifier and round-trip differ.
+
+``inspect`` answers "is this document structurally sound as a CiteBind
+document?", with a named, severity-ranked finding for every damage mode.
+``diff`` answers "what changed between two documents?", so the manual Word
+round-trip has a machine-checkable result.
+
+Every part of the untrusted input is parsed with the hardened parser
+(``xmlsafe``); the document body is parsed directly, not through python-docx,
+whose parser is not hardened.
+
+Finding kinds are a closed enum (``FindingKind``). The severity table below is
+the ONLY severity source, and ``tests/test_verify.py`` proves every kind is
+triggerable by a fixture, so a kind can neither disappear from reporting nor
+appear without classification.
+"""
+
+import zipfile
+from collections import Counter
+from dataclasses import dataclass, field
+from enum import Enum
+from pathlib import Path
+from typing import Optional, Union
+
+from lxml import etree
+
+from .part import PayloadError, find_citebind_part, payload_to_dict
+from .schema import (
+    CLUSTER_ID_DUPLICATE,
+    CLUSTER_REFERENCE_UNKNOWN,
+    REFERENCE_ID_DUPLICATE,
+    SchemaError,
+    validate_document,
+)
+from .xmlsafe import UnsafeXML, parse_xml_hardened
+
+W_NS = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+
+
+def _q(name: str) -> str:
+    return f"{{{W_NS}}}{name}"
+
+
+CITATION_PREFIX = "citebind:citation:"
+BIBLIOGRAPHY_TAG = "citebind:bibliography"
+TAG_PREFIX = "citebind:"
+
+
+class FindingKind(str, Enum):
+    PAYLOAD_PART_MISSING = "payload_part_missing"
+    PAYLOAD_INVALID = "payload_invalid"
+    DUPLICATE_REFERENCE_ID = "duplicate_reference_id"
+    DUPLICATE_CLUSTER_ID = "duplicate_cluster_id"
+    DANGLING_CLUSTER_REFERENCE = "dangling_cluster_reference"
+    REFERENCE_UNCITED = "reference_uncited"
+    CONTROL_MISSING_FOR_CLUSTER = "control_missing_for_cluster"
+    CONTROL_TAG_WITHOUT_CLUSTER = "control_tag_without_cluster"
+    CONTROL_TAG_UNRECOGNIZED = "control_tag_unrecognized"
+    CITATION_CONTROL_EMPTY = "citation_control_empty"
+    CITATION_CONTROLS_INCONSISTENT = "citation_controls_inconsistent"
+    BIBLIOGRAPHY_CONTROL_MISSING = "bibliography_control_missing"
+    BIBLIOGRAPHY_COUNT_MISMATCH = "bibliography_count_mismatch"
+
+
+_SEVERITY = {
+    FindingKind.PAYLOAD_PART_MISSING: "error",
+    FindingKind.PAYLOAD_INVALID: "error",
+    FindingKind.DUPLICATE_REFERENCE_ID: "error",
+    FindingKind.DUPLICATE_CLUSTER_ID: "error",
+    FindingKind.DANGLING_CLUSTER_REFERENCE: "error",
+    FindingKind.REFERENCE_UNCITED: "warning",
+    FindingKind.CONTROL_MISSING_FOR_CLUSTER: "error",
+    FindingKind.CONTROL_TAG_WITHOUT_CLUSTER: "error",
+    FindingKind.CONTROL_TAG_UNRECOGNIZED: "note",
+    FindingKind.CITATION_CONTROL_EMPTY: "error",
+    FindingKind.CITATION_CONTROLS_INCONSISTENT: "warning",
+    FindingKind.BIBLIOGRAPHY_CONTROL_MISSING: "error",
+    FindingKind.BIBLIOGRAPHY_COUNT_MISMATCH: "warning",
+}
+
+# schema error codes that have a dedicated finding kind; any other SchemaError
+# becomes PAYLOAD_INVALID with the named code preserved in the detail.
+_SCHEMA_CODE_TO_KIND = {
+    REFERENCE_ID_DUPLICATE: FindingKind.DUPLICATE_REFERENCE_ID,
+    CLUSTER_ID_DUPLICATE: FindingKind.DUPLICATE_CLUSTER_ID,
+    CLUSTER_REFERENCE_UNKNOWN: FindingKind.DANGLING_CLUSTER_REFERENCE,
+}
+
+
+@dataclass
+class Finding:
+    kind: FindingKind
+    severity: str
+    detail: str
+
+
+@dataclass
+class Report:
+    has_payload: bool
+    schema_version: Optional[str]
+    selected_style: Optional[str]
+    reference_ids: list[str]
+    cluster_ids: list[str]
+    control_tags: list[str]
+    # tag -> visible texts of every occurrence of that tag, in document order.
+    # Duplicate tags are normal (a cluster cited twice) and must not collapse.
+    control_texts: dict[str, list[str]]
+    inventory: dict[str, int]
+    findings: list[Finding] = field(default_factory=list)
+
+    @property
+    def is_clean(self) -> bool:
+        return not self.findings
+
+
+class DiffKind(str, Enum):
+    PAYLOAD_LOST = "payload_lost"
+    PAYLOAD_GAINED = "payload_gained"
+    SCHEMA_VERSION_CHANGED = "schema_version_changed"
+    STYLE_CHANGED = "style_changed"
+    REFERENCE_LOST = "reference_lost"
+    REFERENCE_GAINED = "reference_gained"
+    CLUSTER_LOST = "cluster_lost"
+    CLUSTER_GAINED = "cluster_gained"
+    CONTROL_LOST = "control_lost"
+    CONTROL_GAINED = "control_gained"
+    CONTROL_RENAMED = "control_renamed"
+    CONTROL_TEXT_ALTERED = "control_text_altered"
+    FIELD_INTRODUCED = "field_introduced"
+    SDT_COUNT_CHANGED = "sdt_count_changed"
+
+
+@dataclass
+class DiffItem:
+    kind: DiffKind
+    detail: str
+
+
+@dataclass
+class DiffReport:
+    items: list[DiffItem] = field(default_factory=list)
+
+    @property
+    def is_clean(self) -> bool:
+        return not self.items
+
+
+@dataclass
+class _BodyScan:
+    citation_texts: dict[str, list[str]]
+    bibliography_present: bool
+    bibliography_entry_count: int
+    control_tags: list[str]
+    control_texts: dict[str, list[str]]
+    unrecognized_tags: list[str]
+    inventory: dict[str, int]
+
+
+def _text_of(node) -> str:
+    if node is None:
+        return ""
+    return "".join(t.text or "" for t in node.iter(_q("t")))
+
+
+def _scan_body(root) -> _BodyScan:
+    scan = _BodyScan(
+        citation_texts={},
+        bibliography_present=False,
+        bibliography_entry_count=0,
+        control_tags=[],
+        control_texts={},
+        unrecognized_tags=[],
+        inventory={"sdt": 0, "fldChar": 0, "instrText": 0, "fldSimple": 0},
+    )
+    for sdt in root.iter(_q("sdt")):
+        scan.inventory["sdt"] += 1
+        tag_el = sdt.find(f"{_q('sdtPr')}/{_q('tag')}")
+        tag = tag_el.get(_q("val")) if tag_el is not None else None
+        if not tag:
+            continue
+        content = sdt.find(_q("sdtContent"))
+        text = _text_of(content)
+        if tag.startswith(CITATION_PREFIX):
+            cluster_id = tag[len(CITATION_PREFIX):]
+            scan.citation_texts.setdefault(cluster_id, []).append(text)
+            scan.control_tags.append(tag)
+            scan.control_texts.setdefault(tag, []).append(text)
+        elif tag == BIBLIOGRAPHY_TAG:
+            scan.bibliography_present = True
+            entries = [
+                child for child in content if child.tag == _q("p")
+            ] if content is not None else []
+            scan.bibliography_entry_count = len(entries)
+            scan.control_tags.append(tag)
+            scan.control_texts.setdefault(tag, []).append(text)
+        elif tag.startswith(TAG_PREFIX):
+            scan.unrecognized_tags.append(f"{tag} (unknown citebind kind)")
+        else:
+            scan.unrecognized_tags.append(f"{tag} (outside citebind namespace)")
+    for name in ("fldChar", "instrText", "fldSimple"):
+        scan.inventory[name] = sum(1 for _ in root.iter(_q(name)))
+    return scan
+
+
+def _read_document_root(docx_path) -> etree._Element:
+    with zipfile.ZipFile(docx_path) as source:
+        return parse_xml_hardened(source.read("word/document.xml"))
+
+
+def _payload_part_exists(source: zipfile.ZipFile) -> bool:
+    """Answer "is a citebind payload part plausibly present?" without a valid parse.
+
+    True when some custom XML item part either carries our root or cannot be
+    parsed at all (a dropped payload must not be masked by Word's own
+    ``b:Sources`` item, which parses fine and is not ours).
+    """
+    for name in source.namelist():
+        if not (
+            name.startswith("customXml/item")
+            and name.endswith(".xml")
+            and "Props" not in name
+        ):
+            continue
+        try:
+            root = parse_xml_hardened(source.read(name))
+        except UnsafeXML:
+            return True
+        if root.tag == "{urn:citebind:citebind:1}document":
+            return True
+    return False
+
+
+def inspect(docx_path: Union[str, Path]) -> Report:
+    root = _read_document_root(docx_path)
+    scan = _scan_body(root)
+    findings: list[Finding] = []
+
+    with zipfile.ZipFile(docx_path) as source:
+        part_name = None
+        try:
+            part_name = find_citebind_part(source)
+        except PayloadError as error:
+            findings.append(_finding(FindingKind.PAYLOAD_INVALID, str(error)))
+        raw = None
+        if part_name is not None:
+            try:
+                raw = payload_to_dict(source.read(part_name))
+            except (UnsafeXML, PayloadError) as error:
+                findings.append(_finding(FindingKind.PAYLOAD_INVALID, str(error)))
+        part_exists = part_name is not None or _payload_part_exists(source)
+
+    schema_version = selected_style = None
+    reference_ids: list[str] = []
+    cluster_ids: list[str] = []
+
+    if raw is not None:
+        schema_version = raw.get("schema_version")
+        selected_style = raw.get("selected_style")
+        references = raw.get("references") if isinstance(raw.get("references"), list) else []
+        reference_ids = [r.get("id") for r in references if isinstance(r, dict)]
+        clusters = (
+            raw.get("citation_clusters")
+            if isinstance(raw.get("citation_clusters"), list)
+            else []
+        )
+        cluster_ids = [c.get("id") for c in clusters if isinstance(c, dict)]
+
+        findings.extend(_findings_from_payload(raw))
+
+        control_cluster_ids = set(scan.citation_texts)
+        for cluster_id in cluster_ids:
+            if cluster_id not in control_cluster_ids:
+                findings.append(
+                    _finding(
+                        FindingKind.CONTROL_MISSING_FOR_CLUSTER,
+                        f"cluster '{cluster_id}' has no citation control in the body",
+                    )
+                )
+        for cluster_id in sorted(control_cluster_ids - set(cluster_ids)):
+            findings.append(
+                _finding(
+                    FindingKind.CONTROL_TAG_WITHOUT_CLUSTER,
+                    f"citation control tags cluster '{cluster_id}', "
+                    "which is not in the payload",
+                )
+            )
+        for cluster_id, texts in sorted(scan.citation_texts.items()):
+            if any(text == "" for text in texts):
+                findings.append(
+                    _finding(
+                        FindingKind.CITATION_CONTROL_EMPTY,
+                        f"citation control for cluster '{cluster_id}' has no visible text",
+                    )
+                )
+            if len(set(texts)) > 1:
+                findings.append(
+                    _finding(
+                        FindingKind.CITATION_CONTROLS_INCONSISTENT,
+                        f"citation controls for cluster '{cluster_id}' disagree: "
+                        f"{sorted(set(texts))}",
+                    )
+                )
+        if cluster_ids and not scan.bibliography_present:
+            findings.append(
+                _finding(
+                    FindingKind.BIBLIOGRAPHY_CONTROL_MISSING,
+                    "clusters exist but there is no bibliography control",
+                )
+            )
+        elif scan.bibliography_present:
+            cited = _cited_reference_ids(raw)
+            cited_existing = cited & set(reference_ids)
+            if scan.bibliography_entry_count != len(cited_existing):
+                findings.append(
+                    _finding(
+                        FindingKind.BIBLIOGRAPHY_COUNT_MISMATCH,
+                        f"bibliography has {scan.bibliography_entry_count} entry(ies) "
+                        f"for {len(cited_existing)} cited reference(s)",
+                    )
+                )
+
+    for tag in scan.unrecognized_tags:
+        findings.append(
+            _finding(
+                FindingKind.CONTROL_TAG_UNRECOGNIZED,
+                f"unrecognized content control tag: {tag}",
+            )
+        )
+
+    if not part_exists and scan.control_tags:
+        findings.append(
+            _finding(
+                FindingKind.PAYLOAD_PART_MISSING,
+                "content controls are present but the citebind payload part is not",
+            )
+        )
+
+    return Report(
+        has_payload=part_exists,
+        schema_version=schema_version,
+        selected_style=selected_style,
+        reference_ids=reference_ids,
+        cluster_ids=cluster_ids,
+        control_tags=scan.control_tags,
+        control_texts=scan.control_texts,
+        inventory=scan.inventory,
+        findings=findings,
+    )
+
+
+def _cited_reference_ids(raw: dict) -> set[str]:
+    clusters = (
+        raw.get("citation_clusters")
+        if isinstance(raw.get("citation_clusters"), list)
+        else []
+    )
+    cited: set[str] = set()
+    for cluster in clusters:
+        if isinstance(cluster, dict):
+            cited.update(cluster.get("reference_ids") or [])
+    return cited
+
+
+def _findings_from_payload(raw: dict) -> list[Finding]:
+    """Structural payload checks that survive partially-damaged payloads.
+
+    These run on the raw dict, before full validation: a payload with BOTH a
+    duplicate id and a schema-violating field must still report the duplicate
+    by name. Validation errors without a dedicated kind surface as
+    PAYLOAD_INVALID with the named schema code in the detail.
+    """
+    findings: list[Finding] = []
+    emitted: set[FindingKind] = set()
+
+    references = raw.get("references") if isinstance(raw.get("references"), list) else []
+    ref_ids = [r.get("id") for r in references if isinstance(r, dict)]
+    seen: set[str] = set()
+    for ref_id in ref_ids:
+        if ref_id in seen:
+            findings.append(
+                _finding(
+                    FindingKind.DUPLICATE_REFERENCE_ID,
+                    f"reference id '{ref_id}' appears more than once",
+                )
+            )
+            emitted.add(FindingKind.DUPLICATE_REFERENCE_ID)
+        seen.add(ref_id)
+
+    clusters = (
+        raw.get("citation_clusters") if isinstance(raw.get("citation_clusters"), list) else []
+    )
+    seen_clusters: set[str] = set()
+    for cluster in clusters:
+        if not isinstance(cluster, dict):
+            continue
+        cluster_id = cluster.get("id")
+        if cluster_id in seen_clusters:
+            findings.append(
+                _finding(
+                    FindingKind.DUPLICATE_CLUSTER_ID,
+                    f"cluster id '{cluster_id}' appears more than once",
+                )
+            )
+            emitted.add(FindingKind.DUPLICATE_CLUSTER_ID)
+        seen_clusters.add(cluster_id)
+        for ref_id in cluster.get("reference_ids") or []:
+            if ref_id not in seen:
+                findings.append(
+                    _finding(
+                        FindingKind.DANGLING_CLUSTER_REFERENCE,
+                        f"cluster '{cluster_id}' cites missing reference '{ref_id}'",
+                    )
+                )
+                emitted.add(FindingKind.DANGLING_CLUSTER_REFERENCE)
+
+    cited = _cited_reference_ids(raw)
+    for ref_id in sorted(set(ref_ids) - cited):
+        findings.append(
+            _finding(FindingKind.REFERENCE_UNCITED, f"reference '{ref_id}' is cited nowhere")
+        )
+
+    try:
+        validate_document(raw)
+    except SchemaError as error:
+        mapped = _SCHEMA_CODE_TO_KIND.get(error.code)
+        if mapped is None or mapped not in emitted:
+            findings.append(_finding(FindingKind.PAYLOAD_INVALID, str(error)))
+    return findings
+
+
+def _finding(kind: FindingKind, detail: str) -> Finding:
+    return Finding(kind=kind, severity=_SEVERITY[kind], detail=detail)
+
+
+def diff(before_path: Union[str, Path], after_path: Union[str, Path]) -> DiffReport:
+    before = inspect(before_path)
+    after = inspect(after_path)
+    items: list[DiffItem] = []
+
+    if before.has_payload and not after.has_payload:
+        items.append(DiffItem(DiffKind.PAYLOAD_LOST, "citebind payload part disappeared"))
+    if after.has_payload and not before.has_payload:
+        items.append(DiffItem(DiffKind.PAYLOAD_GAINED, "citebind payload part appeared"))
+    if (
+        before.has_payload
+        and after.has_payload
+        and before.schema_version != after.schema_version
+    ):
+        items.append(
+            DiffItem(
+                DiffKind.SCHEMA_VERSION_CHANGED,
+                f"{before.schema_version} -> {after.schema_version}",
+            )
+        )
+    if (
+        before.has_payload
+        and after.has_payload
+        and before.selected_style != after.selected_style
+    ):
+        items.append(
+            DiffItem(
+                DiffKind.STYLE_CHANGED,
+                f"{before.selected_style} -> {after.selected_style}",
+            )
+        )
+
+    before_refs, after_refs = set(before.reference_ids), set(after.reference_ids)
+    for ref_id in sorted(before_refs - after_refs):
+        items.append(DiffItem(DiffKind.REFERENCE_LOST, f"reference '{ref_id}' disappeared"))
+    for ref_id in sorted(after_refs - before_refs):
+        items.append(DiffItem(DiffKind.REFERENCE_GAINED, f"reference '{ref_id}' appeared"))
+
+    before_clusters, after_clusters = set(before.cluster_ids), set(after.cluster_ids)
+    for cluster_id in sorted(before_clusters - after_clusters):
+        items.append(DiffItem(DiffKind.CLUSTER_LOST, f"cluster '{cluster_id}' disappeared"))
+    for cluster_id in sorted(after_clusters - before_clusters):
+        items.append(DiffItem(DiffKind.CLUSTER_GAINED, f"cluster '{cluster_id}' appeared"))
+
+    # Occurrence-level multiset diff: a cluster legitimately cited twice means
+    # two controls share one tag, and losing one of them must still register.
+    before_counts = Counter(before.control_tags)
+    after_counts = Counter(after.control_tags)
+    lost_tags = sorted((before_counts - after_counts).elements())
+    gained_tags = sorted((after_counts - before_counts).elements())
+
+    renamed_pairs: list[tuple[str, str]] = []
+    for lost in list(lost_tags):
+        if not lost.startswith(CITATION_PREFIX):
+            continue
+        lost_texts = set(before.control_texts.get(lost, []))
+        for gained in gained_tags:
+            if not gained.startswith(CITATION_PREFIX):
+                continue
+            if (
+                lost_texts & set(after.control_texts.get(gained, []))
+                and lost[len(CITATION_PREFIX):] != gained[len(CITATION_PREFIX):]
+            ):
+                renamed_pairs.append((lost, gained))
+                lost_tags.remove(lost)
+                gained_tags.remove(gained)
+                break
+    for lost, gained in renamed_pairs:
+        items.append(
+            DiffItem(DiffKind.CONTROL_RENAMED, f"{lost} -> {gained}")
+        )
+    for tag in lost_tags:
+        items.append(DiffItem(DiffKind.CONTROL_LOST, f"control '{tag}' disappeared"))
+    for tag in gained_tags:
+        items.append(DiffItem(DiffKind.CONTROL_GAINED, f"control '{tag}' appeared"))
+
+    for tag, before_texts in before.control_texts.items():
+        after_texts = after.control_texts.get(tag)
+        if after_texts is not None and before_texts != after_texts:
+            items.append(
+                DiffItem(
+                    DiffKind.CONTROL_TEXT_ALTERED,
+                    f"control '{tag}' visible text changed: "
+                    f"{before_texts} -> {after_texts}",
+                )
+            )
+
+    for name in ("fldChar", "instrText", "fldSimple"):
+        delta = after.inventory[name] - before.inventory[name]
+        if delta > 0:
+            items.append(
+                DiffItem(
+                    DiffKind.FIELD_INTRODUCED,
+                    f"{name} count increased by {delta}; CiteBind never introduces fields",
+                )
+            )
+
+    delta_sdt = after.inventory["sdt"] - before.inventory["sdt"]
+    explained = len(gained_tags) - len(lost_tags)
+    if delta_sdt != explained:
+        items.append(
+            DiffItem(
+                DiffKind.SDT_COUNT_CHANGED,
+                f"sdt count changed by {delta_sdt}, control changes explain {explained}",
+            )
+        )
+
+    return DiffReport(items=items)
+
+
+# --- rendering -------------------------------------------------------------------
+
+
+def render_report(report: Report, path: Union[str, Path]) -> str:
+    lines = [f"CiteBind inspect: {path}"]
+    if report.has_payload and report.schema_version is None:
+        lines.append("payload: present (unreadable)")
+    elif report.has_payload:
+        lines.append(
+            f"payload: present (schema_version={report.schema_version}, "
+            f"style={report.selected_style})"
+        )
+    else:
+        lines.append("payload: absent")
+    lines.append(f"references: {', '.join(report.reference_ids) or '(none)'}")
+    lines.append(f"clusters: {', '.join(report.cluster_ids) or '(none)'}")
+    lines.append(f"controls: {', '.join(report.control_tags) or '(none)'}")
+    inv = report.inventory
+    lines.append(
+        f"inventory: sdt={inv['sdt']} fldChar={inv['fldChar']} "
+        f"instrText={inv['instrText']} fldSimple={inv['fldSimple']}"
+    )
+    if report.is_clean:
+        lines.append("findings: none — clean")
+    else:
+        lines.append(f"findings: {len(report.findings)}")
+        for finding in report.findings:
+            lines.append(f"  [{finding.severity}] {finding.kind.value}: {finding.detail}")
+    return "\n".join(lines)
+
+
+def render_diff(report: DiffReport, before: Union[str, Path], after: Union[str, Path]) -> str:
+    lines = [f"CiteBind diff: {before} -> {after}"]
+    if report.is_clean:
+        lines.append("no structural differences")
+    else:
+        lines.append(f"{len(report.items)} difference(s):")
+        for item in report.items:
+            lines.append(f"  {item.kind.value}: {item.detail}")
+    return "\n".join(lines)

@@ -148,7 +148,13 @@ def payload_to_xml(doc: CiteBindDocument) -> bytes:
     )
 
 
-def xml_to_payload(data: bytes) -> CiteBindDocument:
+def payload_to_dict(data: bytes) -> dict:
+    """Convert payload XML bytes to its dict form WITHOUT schema validation.
+
+    Used by the verifier to inspect payloads that may be damaged: structural
+    findings (duplicate ids, dangling references) must be reportable even when
+    full validation would abort on an earlier error.
+    """
     root = parse_xml_hardened(data)
     if root.tag != ROOT_TAG:
         raise PayloadError(
@@ -168,7 +174,11 @@ def xml_to_payload(data: bytes) -> CiteBindDocument:
         _cluster_to_dict(node)
         for node in root.findall(f"{CB}citation_clusters/{CB}cluster")
     ]
-    return CiteBindDocument.from_dict(payload)
+    return payload
+
+
+def xml_to_payload(data: bytes) -> CiteBindDocument:
+    return CiteBindDocument.from_dict(payload_to_dict(data))
 
 
 def _reference_to_dict(node) -> dict:
