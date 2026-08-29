@@ -24,3 +24,7 @@ __pycache__/
 *.egg-info/
 .pytest_cache/
 .venv/
+
+# Generated Phase 1 spike outputs
+spike/spike_v1.docx
+spike/_plain_tmp.docx
