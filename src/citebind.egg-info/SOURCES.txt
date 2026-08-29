@@ -1,0 +1,9 @@
+README.md
+pyproject.toml
+src/citebind/__init__.py
+src/citebind.egg-info/PKG-INFO
+src/citebind.egg-info/SOURCES.txt
+src/citebind.egg-info/dependency_links.txt
+src/citebind.egg-info/requires.txt
+src/citebind.egg-info/top_level.txt
+tests/test_scaffold.py

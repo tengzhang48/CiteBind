@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "citebind"
+version = "0.1.0"
+description = "Verified references that travel with your manuscript"
+requires-python = ">=3.11"
+dependencies = [
+    "python-docx>=1.2.0",
+    "lxml>=6.1",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=9.0"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
