@@ -296,3 +296,45 @@ The bounded structure is sound: separate repos, DOCX-as-interface, read-only
 ArtifactCert adapter deferred to Phase 6, AI subordinate and barred from
 generating bibliographic identity. The §9 next action — create the repo, do
 only the Phase 1 spike — is the right first move, with the §10.2 amendment.
+
+### 10.5 Finding from ArtifactCert's DOCX layer — §5 overstates what works today
+
+Checked ArtifactCert's actual Word handling (2026-08-29). It never opens Word:
+DOCX files are treated as untrusted OPC zip packages and manipulated with
+`python-docx` + `lxml`, with real Word-produced files arriving from
+collaborators as opaque inputs. Four consequences for this plan:
+
+1. **The protection boundary already exists, and is stricter than §5 assumes.**
+   `src/artifactcert/docx_patch/safety.py` refuses to patch any paragraph
+   containing a content control, with code `PATCH_NOT_SAFE_CONTENT_CONTROL`.
+   CiteBind citation clusters will therefore be protected from ArtifactCert
+   edits on day one, with no ArtifactCert change required.
+
+2. **But §5's closing claim is false today.** "Ordinary surrounding prose can
+   continue through ArtifactCert's normal A001 Apply & Verify workflow" does
+   not hold: the refusal is per-paragraph, so a paragraph containing a CiteBind
+   citation currently cannot have *any* of its prose patched. The real Phase 6
+   work is not "teach ArtifactCert to protect CiteBind structures" — that is
+   done — but "teach ArtifactCert to patch prose *around* an sdt safely."
+   §5 should be amended to say so.
+
+3. **The competitor's failure mode is already modeled, and it is fields.**
+   `docx_manifest.py::paragraph_flags()` flags `citation_manager_field` for
+   Zotero/EndNote/Mendeley, under the heading "why this paragraph's canonical
+   text is an INCOMPLETE rendering of what a reader sees" — the cached result
+   text of a field is not trustworthy canonical text. This is independent
+   evidence for CiteBind's core design choice, and it hardens one rule:
+   CiteBind must use content controls, never fields.
+
+4. **The verifier shape and the no-Word workflow are both borrowable.**
+   `docx_patch/regression.py` builds a before/after structural inventory
+   (counts of `sdt`, `fldChar`, `instrText`, `fldSimple`, `bookmarkStart`,
+   `hyperlink`, `oMath`, `drawing`) plus unexpected-paragraph-change detection
+   — which is exactly the shape of the Phase 1 round-trip verifier. And
+   ArtifactCert's fixtures are all generated programmatically, never real
+   manuscripts, which is the rule CiteBind should inherit verbatim.
+
+Practical effect on sequencing: Phase 1 does **not** require Word on the
+development machine. It splits into a generator + verifier + one-page human
+checklist built and tested on Linux, and a five-minute manual open/edit/save
+performed wherever Word actually lives. See `GLM_DEV_PLAN.md`, task T-06.

@@ -130,6 +130,9 @@ contract is stable (Phase 6).
 
 Full detail, including per-phase task lists and the integration acceptance
 test, is in [`docs/CiteBind_PLAN_2026-08-29.md`](docs/CiteBind_PLAN_2026-08-29.md).
+The execution plan for Phase 0-1 -- task ledger, acceptance criteria, and the
+implementer/driver protocol -- is in
+[`docs/GLM_DEV_PLAN.md`](docs/GLM_DEV_PLAN.md).
 
 ## Current status
 
