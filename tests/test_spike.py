@@ -4,6 +4,10 @@ The manual Word step cannot be run on this machine (dev plan §2). These tests
 do the two things that CAN be tested here: the generator produces exactly the
 promised fixture with no network, and the checker reaches the right per-probe
 verdict on synthetic stand-ins for every probe outcome.
+
+Checker design rules (review note 2026-08-29, F1/F2): files are identified by
+the names the instructions promise; P1/P4/P6 each grade their own evidence
+file; every row names the file it read and the fact that decided it.
 """
 
 import copy
@@ -14,7 +18,7 @@ from pathlib import Path
 from docx import Document
 from lxml import etree
 
-from citebind.controls import find_controls
+from citebind.controls import find_controls, insert_citation
 from citebind.part import extract
 from citebind.spike import (
     BASELINE_DOI,
@@ -22,7 +26,6 @@ from citebind.spike import (
     check_spike,
     make_spike,
 )
-from test_verify import transform_document
 from test_verify import q  # same W-namespace helper
 
 W_NS = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
@@ -89,41 +92,67 @@ def test_generated_spike_introduces_no_fields(tmp_path):
         assert len(list(tree.iter(q(name)))) == 0
 
 
-# --- synthetic stand-ins for the six probes ---------------------------------------
+# --- simulated Word sessions ------------------------------------------------------
 
 
-def base_fixture(tmp_path):
-    return make_spike(tmp_path)
+def edit_document_xml(src, dst, fn):
+    with zipfile.ZipFile(src) as zin:
+        tree = etree.fromstring(zin.read("word/document.xml"))
+        fn(tree)
+        new = etree.tostring(tree, xml_declaration=True, encoding="UTF-8", standalone=True)
+        with zipfile.ZipFile(dst, "w", zipfile.ZIP_DEFLATED) as zout:
+            for item in zin.infolist():
+                zout.writestr(item.filename, new if item.filename == "word/document.xml" else zin.read(item.filename))
+
+
+def drop_payload_parts(src, dst):
+    """Remove CiteBind's payload part and its package relationship, the way a
+    package that 'lost the payload' during a Word save would look."""
+    import re as _re
+
+    from citebind.part import find_citebind_part
+
+    with zipfile.ZipFile(src) as zin:
+        ours = find_citebind_part(zin)
+        assert ours is not None
+        n = _re.match(r"^customXml/item(\d+)\.xml$", ours).group(1)
+        drop = {ours, f"customXml/itemProps{n}.xml", f"customXml/_rels/item{n}.xml.rels"}
+        rels = etree.fromstring(zin.read("_rels/.rels"))
+        for rel in list(rels):
+            if rel.get("Target") == ours:
+                rels.remove(rel)
+        new_rels = etree.tostring(rels, xml_declaration=True, encoding="UTF-8")
+        with zipfile.ZipFile(dst, "w", zipfile.ZIP_DEFLATED) as zout:
+            for item in zin.infolist():
+                if item.filename in drop:
+                    continue
+                if item.filename == "_rels/.rels":
+                    zout.writestr(item.filename, new_rels)
+                else:
+                    zout.writestr(item.filename, zin.read(item.filename))
+
+
+def first_citation_sdt(tree):
+    for sdt in tree.iter(q("sdt")):
+        tag = sdt.find(f"{q('sdtPr')}/{q('tag')}")
+        if tag is not None and tag.get(q("val")) == "citebind:citation:C001":
+            return sdt
+    raise AssertionError("no citation control found")
 
 
 def resave(path, name):
+    """Round a file through python-docx's writer, simulating a Word re-save."""
     out = path.parent / name
     Document(path).save(out)
     return out
 
 
-def standin_probe3_pass(tmp_path):
-    path = base_fixture(tmp_path)
-
-    def add_copy(tree):
-        # simulate Word pasting a copy of the first citation control
-        first = None
-        for sdt in tree.iter(q("sdt")):
-            tag = sdt.find(f"{q('sdtPr')}/{q('tag')}")
-            if tag is not None and tag.get(q("val")) == "citebind:citation:C001":
-                first = sdt
-                break
-        target = list(tree.iter(q("p")))[1]
-        target.append(__import__("copy").deepcopy(first))
-
-    transform_document(path, add_copy, path.parent / "p3.docx")
-    return path.parent / "p3.docx"
-
-
-def standin_probe4_pass(tmp_path):
-    from citebind.controls import insert_citation
-
-    pasted = tmp_path / "pasted.docx"
+def make_pasted_doc(tmp_path, name="pasted.docx", with_payload=False, pristine=None):
+    if with_payload:
+        pasted = tmp_path / name
+        copy_doc(pristine, pasted)
+        return pasted
+    pasted = tmp_path / name
     document = Document()
     document.add_paragraph("Pasted into a blank document ")
     insert_citation(document.paragraphs[0], "C001", "[1]")
@@ -131,130 +160,204 @@ def standin_probe4_pass(tmp_path):
     return pasted
 
 
-def standin_probe4_fail(tmp_path):
-    pasted = tmp_path / "pasted_plain.docx"
-    document = Document()
-    document.add_paragraph("Pasted as plain text [1]")
-    document.save(pasted)
-    return pasted
+def copy_doc(src, dst):
+    with zipfile.ZipFile(src) as zin, zipfile.ZipFile(dst, "w", zipfile.ZIP_DEFLATED) as zout:
+        for item in zin.infolist():
+            zout.writestr(item.filename, zin.read(item.filename))
 
 
-def standin_probe5_pass(tmp_path):
-    path = base_fixture(tmp_path)
+def build_returned_files(
+    tmp_path,
+    prose=True,
+    paste=True,
+    tracked=True,
+    payload_loss_at_end=False,
+    pasted_with_payload=False,
+    include_step1=True,
+    include_pasted=True,
+    include_renamed=True,
+    tamper_text=False,
+):
+    """Simulate one human Word session and return the four promised files."""
+    pristine = make_spike(tmp_path)
+    pristine_keep = tmp_path / "pristine_keep.docx"
+    copy_doc(pristine, pristine_keep)  # main will overwrite spike_v1.docx below
 
-    def tracked_insert(tree):
-        body = tree.find(q("body"))
-        paragraph = body.find(q("p"))
-        ins = etree.Element(q("ins"))
-        ins.set(q("id"), "1")
-        run = etree.SubElement(ins, q("r"))
-        t = etree.SubElement(run, q("t"))
-        t.text = "Tracked words "
-        run_before = paragraph.find(q("r"))
-        run_before.addprevious(ins)
+    def session(tree):
+        prose_paragraphs = tree.find(q("body")).findall(q("p"))
+        if prose:
+            r = etree.SubElement(prose_paragraphs[0], q("r"))
+            t = etree.SubElement(r, q("t"))
+            t.text = " A typed sentence. "
+        if paste:
+            prose_paragraphs[1].append(copy.deepcopy(first_citation_sdt(tree)))
+        if tracked:
+            first = first_citation_sdt(tree)
+            ins = etree.Element(q("ins"))
+            ins.set(q("id"), "1")
+            run = etree.SubElement(ins, q("r"))
+            t = etree.SubElement(run, q("t"))
+            t.text = "Tracked words "
+            first.addprevious(ins)
+        if tamper_text:
+            t = first_citation_sdt(tree).find(f"{q('sdtContent')}/{q('r')}/{q('t')}")
+            t.text = "[7]"
 
-    transform_document(path, tracked_insert, path.parent / "p5.docx")
-    return path.parent / "p5.docx"
+    edited = tmp_path / "edited.docx"
+    edit_document_xml(pristine, edited, session)
+    main = resave(edited, "spike_v1.docx")
+    if payload_loss_at_end:
+        damaged = tmp_path / "main_damaged.docx"
+        drop_payload_parts(main, damaged)
+        main = resave(damaged, "spike_v1.docx")
 
+    step1 = resave(pristine_keep, "step1_reopened.docx") if include_step1 else None
+    pasted = (
+        make_pasted_doc(tmp_path, with_payload=pasted_with_payload, pristine=pristine_keep)
+        if include_pasted
+        else None
+    )
+    renamed = resave(main, "spike_renamed.docx") if include_renamed else None
 
-def standin_probe5_fail(tmp_path):
-    path = base_fixture(tmp_path)
-
-    def untracked_insert(tree):
-        paragraph = tree.find(f"{q('body')}/{q('p')}")
-        run = etree.SubElement(paragraph, q("r"))
-        t = etree.SubElement(run, q("t"))
-        t.text = "Untracked words "
-
-    transform_document(path, untracked_insert, path.parent / "p5fail.docx")
-    return path.parent / "p5fail.docx"
-
-
-def standin_payload_lost(tmp_path):
-    from test_verify import damage_payload_removed
-
-    return damage_payload_removed(base_fixture(tmp_path), tmp_path)
-
-
-def standin_text_tampered(tmp_path):
-    from test_verify import damage_visible_text_edited
-
-    return damage_visible_text_edited(base_fixture(tmp_path), tmp_path)
+    files = [main]
+    files += [f for f in (step1, pasted, renamed) if f is not None]
+    return files
 
 
 # --- checker verdicts -------------------------------------------------------------
 
 
+def row(report, probe):
+    return [r for r in report.rows if r.probe == probe][0]
+
+
 def test_check_spike_all_probes_pass(tmp_path):
-    # One simulated Word session: probe 2 (prose), probe 3 (paste within the
-    # document) and probe 5 (tracked edit) all modify the SAME main file.
-    src = make_spike(tmp_path)
-
-    def session_edits(tree):
-        first = None
-        for sdt in tree.iter(q("sdt")):
-            tag = sdt.find(f"{q('sdtPr')}/{q('tag')}")
-            if tag is not None and tag.get(q("val")) == "citebind:citation:C001":
-                first = sdt
-                break
-        prose_paragraphs = [p for p in tree.find(q("body")).findall(q("p"))]
-        prose_paragraphs[1].append(copy.deepcopy(first))  # probe 3
-        ins = etree.Element(q("ins"))  # probe 5
-        ins.set(q("id"), "1")
-        run = etree.SubElement(ins, q("r"))
-        t = etree.SubElement(run, q("t"))
-        t.text = "Tracked words "
-        first.addprevious(ins)
-
-    transform_document(src, session_edits, tmp_path / "edited.docx")
-    main = resave(tmp_path / "edited.docx", "main_returned.docx")
-    p4 = standin_probe4_pass(tmp_path)
-    p6 = resave(main, "spike_renamed.docx")
-    report = check_spike(main, [p4, p6])
-    for row in report.rows:
-        assert row.verdict == "PASS", f"{row.probe}: {row.detail}"
+    files = build_returned_files(tmp_path)
+    report = check_spike(files)
+    for r in report.rows:
+        assert r.verdict == "PASS", f"{r.probe}: {r.detail}"
     assert report.all_passed
+    assert any("graded as" in line for line in report.classification)
 
 
-def test_check_probe3_fails_without_pasted_copy(tmp_path):
-    main = make_spike(tmp_path)
-    p4 = standin_probe4_pass(tmp_path)
-    report = check_spike(main, [p4])
-    row = [r for r in report.rows if r.probe == "P3"][0]
-    assert row.verdict == "FAIL"
-
-
-def test_check_probe4_fails_on_plain_text_paste(tmp_path):
-    main = make_spike(tmp_path)
-    p4 = standin_probe4_fail(tmp_path)
-    report = check_spike(main, [p4])
-    row = [r for r in report.rows if r.probe == "P4"][0]
-    assert row.verdict == "FAIL"
-
-
-def test_check_probe5_fails_without_tracked_changes(tmp_path):
-    main = make_spike(tmp_path)
-    p5 = standin_probe5_fail(tmp_path)
-    report = check_spike(main, [p5])
-    row = [r for r in report.rows if r.probe == "P5"][0]
-    assert row.verdict == "FAIL"
-
-
-def test_check_probes_1_and_6_fail_when_payload_lost(tmp_path):
-    damaged = standin_payload_lost(tmp_path)
-    report = check_spike(damaged, [])
+def test_f1_step5_payload_loss_must_not_fail_p1(tmp_path):
+    # The regression the review note demands: a defect introduced at step 5
+    # (payload lost during the Track Changes save) must NOT fail P1 — P1 is
+    # graded on its own step-1 artifact, which is intact here.
+    files = build_returned_files(tmp_path, payload_loss_at_end=True)
+    report = check_spike(files)
     verdicts = {r.probe: r.verdict for r in report.rows}
-    assert verdicts["P1"] == "FAIL"
-    assert "P6" not in verdicts or verdicts["P6"] == "FAIL" or True
+    assert verdicts["P1"] == "PASS", row(report, "P1").detail
+    # the loss IS caught, by the probe that owns the end state:
+    assert verdicts["P6"] == "FAIL"
+    assert "payload missing or altered" in row(report, "P6").detail
+    # P2 and P5 grade the visible layer, which survived; their rows say
+    # exactly that instead of borrowing payload evidence (old P5 printed
+    # FAIL above a detail claiming everything was intact)
+    assert verdicts["P2"] == "PASS", row(report, "P2").detail
+    assert verdicts["P5"] == "PASS"
+    assert "tracked edits present" in row(report, "P5").detail
+    # every failing row names the file it read and a deciding fact
+    for r in report.rows:
+        if r.verdict == "FAIL":
+            assert "deciding fact" in r.detail or "was not returned" in r.detail
 
 
-def test_check_probe2_fails_when_visible_text_tampered(tmp_path):
-    main = standin_text_tampered(tmp_path)
-    report = check_spike(main, [])
-    row = [r for r in report.rows if r.probe == "P2"][0]
-    assert row.verdict == "FAIL"
+def test_f2_paste_retaining_payload_is_still_classified_as_paste(tmp_path):
+    # The regression the review note demands: when a clipboard paste carries
+    # the payload too, files must keep the roles their names promise. The old
+    # content-based classifier graded pasted.docx as the save-as copy and
+    # asserted the library "does not travel (expected)" — the exact inverse.
+    files = build_returned_files(tmp_path, pasted_with_payload=True)
+    report = check_spike(files)
+    p4 = row(report, "P4")
+    p6 = row(report, "P6")
+    assert p4.file_read.endswith("pasted.docx")
+    assert p6.file_read.endswith("spike_renamed.docx")
+    # the payload's presence is reported as a fact, with no "expected" label
+    assert "payload part present" in p4.detail
+    assert "expected" not in p4.detail
+    assert p6.verdict == "PASS"
 
 
-def test_check_spike_exit_code_contract(tmp_path):
-    main = make_spike(tmp_path)
-    assert check_spike(main, []).all_passed is False  # probes 3-6 have no files
+def test_p3_fails_without_pasted_copy(tmp_path):
+    files = build_returned_files(tmp_path, paste=False)
+    report = check_spike(files)
+    assert row(report, "P3").verdict == "FAIL"
+    assert "need at least 3" in row(report, "P3").detail
+    # the row must say a skipped step also produces this failure
+    assert row(report, "P3").cannot_determine is not None
+
+
+def test_p4_fails_on_plain_text_paste(tmp_path):
+    files = build_returned_files(tmp_path)
+    plain = tmp_path / "pasted.docx"
+    document = Document()
+    document.add_paragraph("Pasted as plain text [1]")
+    document.save(plain)
+    files = [f for f in files if f.name != "pasted.docx"] + [plain]
+    report = check_spike(files)
+    assert row(report, "P4").verdict == "FAIL"
+    assert "0 tagged citation control(s)" in row(report, "P4").detail
+
+
+def test_p5_fails_without_tracked_changes(tmp_path):
+    files = build_returned_files(tmp_path, tracked=False)
+    report = check_spike(files)
+    assert row(report, "P5").verdict == "FAIL"
+    assert "no tracked edits" in row(report, "P5").detail
+    assert row(report, "P5").cannot_determine is not None
+
+
+def test_p2_fails_when_visible_text_tampered(tmp_path):
+    files = build_returned_files(tmp_path, tamper_text=True)
+    report = check_spike(files)
+    assert row(report, "P2").verdict == "FAIL"
+    assert "'[7]'" in row(report, "P2").detail
+    # and it says what the row cannot determine
+    assert "cannot be attributed to step 2 alone" in row(report, "P2").cannot_determine
+
+
+def test_missing_files_are_named_plainly(tmp_path):
+    main = build_returned_files(tmp_path, include_step1=False, include_pasted=False, include_renamed=False)
+    report = check_spike([main[0]])
+    assert "step1_reopened.docx was not returned" in row(report, "P1").detail
+    assert "pasted.docx was not returned" in row(report, "P4").detail
+    assert "spike_renamed.docx was not returned" in row(report, "P6").detail
+
+
+def test_unrecognized_file_is_reported_and_never_graded(tmp_path):
+    # The old checker graded any citation-bearing file as the paste. A file
+    # with a different name must be reported as unrecognized instead.
+    files = build_returned_files(tmp_path, include_pasted=False)
+    stray = tmp_path / "some_other_file.docx"
+    document = Document()
+    document.add_paragraph("Blah ")
+    insert_citation(document.paragraphs[0], "C001", "[1]")
+    document.save(stray)
+    report = check_spike(files + [stray])
+    assert any("some_other_file.docx" in line for line in report.classification)
+    assert "pasted.docx was not returned" in row(report, "P4").detail
+    assert "some_other_file.docx" in row(report, "P4").detail
+    assert row(report, "P4").file_read is None
+
+
+def test_exit_contract(tmp_path):
+    good = build_returned_files(tmp_path)
+    assert check_spike(good).all_passed is True
+    incomplete = build_returned_files(
+        tmp_path, include_step1=False, include_pasted=False, include_renamed=False
+    )
+    assert check_spike(incomplete).all_passed is False
+
+
+def test_nonexistent_file_is_reported_not_crashing(tmp_path):
+    # A typo'd path must degrade to a plain statement, never a traceback.
+    files = build_returned_files(tmp_path)
+    report = check_spike(files + [tmp_path / "typoed_name.docx"])
+    assert any(
+        "typoed_name.docx" in line and "does not exist" in line
+        for line in report.classification
+    )
+    # the recognized files are still graded
+    assert row(report, "P1").verdict == "PASS"

@@ -6,14 +6,19 @@ ordinary editing. You need **Microsoft Word** (Windows or macOS) and the file
 text, two boxed **[1]** citations, and a short reference list.
 
 Do the steps **in order**. Save whenever a step says so. When you finish,
-send back **every file** you produced (there will be three).
+send back **every file** you produced (there will be **four**, named exactly
+as written below).
 
 A "boxed" citation is the citation text with a light box around it that Word
 draws when you click inside it.
 
-1. **Open and reopen.** Open `spike_v1.docx` in Word. Change nothing.
-   Save it (Ctrl+S / Cmd+S). Close Word. Reopen the file.
-   *(This checks the file survives an ordinary open/save cycle.)*
+1. **Open, save, and set the baseline copy.** Open `spike_v1.docx` in Word.
+   Change nothing. Save it (Ctrl+S / Cmd+S). Close Word. Reopen it. Then use
+   **File → Save As** to save a copy named **`step1_reopened.docx`** — same
+   folder, format Word Document (.docx). Close that copy, then reopen the
+   original `spike_v1.docx` and keep working in it.
+   *(The copy shows what the file looks like after nothing but an
+   open/save/close/reopen cycle.)*
 
 2. **Type some prose.** Click at the end of the **first** sentence of plain
    text — not inside a boxed [1] — and type one short extra sentence.
@@ -42,9 +47,10 @@ draws when you click inside it.
    (format: Word Document, .docx).
    *(This checks the structures survive a save-as.)*
 
-**Send back these three files:**
+**Send back these four files, with exactly these names:**
 
-- `spike_v1.docx` (edited in steps 1–3 and 5)
+- `step1_reopened.docx` (from step 1)
+- `spike_v1.docx` (edited in steps 2, 3, and 5)
 - `pasted.docx` (from step 4)
 - `spike_renamed.docx` (from step 6)
 

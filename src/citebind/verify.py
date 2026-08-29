@@ -24,6 +24,7 @@ from typing import Optional, Union
 
 from lxml import etree
 
+from .controls import scan_document_controls
 from .part import PayloadError, find_citebind_part, payload_to_dict
 from .schema import (
     CLUSTER_ID_DUPLICATE,
@@ -42,8 +43,6 @@ def _q(name: str) -> str:
 
 
 CITATION_PREFIX = "citebind:citation:"
-BIBLIOGRAPHY_TAG = "citebind:bibliography"
-TAG_PREFIX = "citebind:"
 
 
 class FindingKind(str, Enum):
@@ -156,13 +155,13 @@ class _BodyScan:
     inventory: dict[str, int]
 
 
-def _text_of(node) -> str:
-    if node is None:
-        return ""
-    return "".join(t.text or "" for t in node.iter(_q("t")))
-
-
 def _scan_body(root) -> _BodyScan:
+    """Inventory the body via the shared hardened scanner (controls module).
+
+    Finding logic is unchanged: this only assembles the same facts the
+    verifier has always reported, from the one scanner every caller now
+    shares (review note F3).
+    """
     scan = _BodyScan(
         citation_texts={},
         bibliography_present=False,
@@ -172,31 +171,20 @@ def _scan_body(root) -> _BodyScan:
         unrecognized_tags=[],
         inventory={"sdt": 0, "fldChar": 0, "instrText": 0, "fldSimple": 0},
     )
-    for sdt in root.iter(_q("sdt")):
-        scan.inventory["sdt"] += 1
-        tag_el = sdt.find(f"{_q('sdtPr')}/{_q('tag')}")
-        tag = tag_el.get(_q("val")) if tag_el is not None else None
-        if not tag:
-            continue
-        content = sdt.find(_q("sdtContent"))
-        text = _text_of(content)
-        if tag.startswith(CITATION_PREFIX):
-            cluster_id = tag[len(CITATION_PREFIX):]
-            scan.citation_texts.setdefault(cluster_id, []).append(text)
-            scan.control_tags.append(tag)
-            scan.control_texts.setdefault(tag, []).append(text)
-        elif tag == BIBLIOGRAPHY_TAG:
+    scanned = scan_document_controls(root)
+    scan.inventory["sdt"] = len(scanned)
+    for sc in scanned:
+        if sc.kind == "citation":
+            scan.citation_texts.setdefault(sc.cluster_id, []).append(sc.text)
+            scan.control_tags.append(sc.tag)
+            scan.control_texts.setdefault(sc.tag, []).append(sc.text)
+        elif sc.kind == "bibliography":
             scan.bibliography_present = True
-            entries = [
-                child for child in content if child.tag == _q("p")
-            ] if content is not None else []
-            scan.bibliography_entry_count = len(entries)
-            scan.control_tags.append(tag)
-            scan.control_texts.setdefault(tag, []).append(text)
-        elif tag.startswith(TAG_PREFIX):
-            scan.unrecognized_tags.append(f"{tag} (unknown citebind kind)")
-        else:
-            scan.unrecognized_tags.append(f"{tag} (outside citebind namespace)")
+            scan.bibliography_entry_count = len(sc.entries)
+            scan.control_tags.append(sc.tag)
+            scan.control_texts.setdefault(sc.tag, []).append(sc.text)
+        elif sc.kind == "unrecognized":
+            scan.unrecognized_tags.append(f"{sc.tag} ({sc.unrecognized_reason})")
     for name in ("fldChar", "instrText", "fldSimple"):
         scan.inventory[name] = sum(1 for _ in root.iter(_q(name)))
     return scan

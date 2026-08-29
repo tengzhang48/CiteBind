@@ -26,9 +26,13 @@ def main(argv=None) -> int:
     check_parser = subparsers.add_parser(
         "check-spike", help="grade returned spike files, one verdict per probe"
     )
-    check_parser.add_argument("docx", help="the returned main spike document")
     check_parser.add_argument(
-        "extras", nargs="*", help="other returned files (pasted copy, save-as copy)"
+        "files",
+        nargs="+",
+        help=(
+            "returned files, named as the instructions promise: spike_v1.docx, "
+            "step1_reopened.docx, pasted.docx, spike_renamed.docx"
+        ),
     )
 
     args = parser.parse_args(argv)
@@ -51,7 +55,7 @@ def main(argv=None) -> int:
         return 0
 
     if args.command == "check-spike":
-        report = check_spike(args.docx, args.extras)
+        report = check_spike(args.files)
         print(render_spike_report(report))
         return 0 if report.all_passed else 1
 

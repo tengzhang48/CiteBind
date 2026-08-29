@@ -175,3 +175,45 @@ def test_controls_survive_python_docx_rewrite(populated, tmp_path):
         "citebind:bibliography",
     ]
     assert [c.text for c in find_controls(resaved)][0] == "[1]"
+
+
+# --- F3: the public finder is on the hardened path, same as the verifier ------
+
+
+def test_find_controls_refuses_doctype_laced_document(tmp_path):
+    from citebind.xmlsafe import UnsafeXML
+
+    path = tmp_path / "laced.docx"
+    document = Document()
+    document.add_paragraph("Has a citation control. ")
+    insert_citation(document.paragraphs[0], "C001", "[1]")
+    document.save(path)
+    with zipfile.ZipFile(path) as zin, zipfile.ZipFile(tmp_path / "out.docx", "w", zipfile.ZIP_DEFLATED) as zout:
+        for item in zin.infolist():
+            if item.filename == "word/document.xml":
+                xml = zin.read(item.filename)
+                xml = xml.replace(
+                    b"<?xml version='1.0' encoding='UTF-8' standalone='yes'?>",
+                    b"<!DOCTYPE document [<!ENTITY x \"y\">]>", 1,
+                )
+                zout.writestr(item.filename, xml)
+            else:
+                zout.writestr(item.filename, zin.read(item.filename))
+    with pytest.raises(UnsafeXML) as exc_info:
+        find_controls(tmp_path / "out.docx")
+    assert exc_info.value.code == "doctype_declared"
+
+
+def test_find_controls_and_verifier_see_the_same_controls(tmp_path):
+    from citebind.verify import inspect
+
+    path = tmp_path / "doc.docx"
+    document = Document()
+    document.add_paragraph("Cite ")
+    document.add_paragraph("Again ")
+    insert_citation(document.paragraphs[0], "C001", "[1]")
+    insert_citation(document.paragraphs[1], "C001", "[1]")
+    document.save(path)
+    assert [c.tag for c in find_controls(path)] == [
+        c for c in inspect(path).control_tags
+    ]

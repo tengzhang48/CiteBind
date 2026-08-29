@@ -68,7 +68,9 @@ def find_citebind_part(source: zipfile.ZipFile) -> Optional[str]:
     """Return the name of the item part carrying our payload root, if any.
 
     A custom XML item with a DOCTYPE is refused loudly even if it is not
-    ours: untrusted input does not get the benefit of the doubt.
+    ours: untrusted input does not get the benefit of the doubt. A package
+    carrying TWO citebind payload parts is refused as well — choosing one
+    silently would be a coin flip (review note F4).
     """
     found: Optional[str] = None
     for name in source.namelist():
@@ -80,7 +82,13 @@ def find_citebind_part(source: zipfile.ZipFile) -> Optional[str]:
             if error.code == "doctype_declared":
                 raise PayloadError(error.code, f"refusing {name}: {error}") from error
             continue
-        if root.tag == ROOT_TAG and found is None:
+        if root.tag == ROOT_TAG:
+            if found is not None:
+                raise PayloadError(
+                    "multiple_payload_parts",
+                    f"citebind payload found in both {found} and {name}; "
+                    "refusing to choose one",
+                )
             found = name
     return found
 

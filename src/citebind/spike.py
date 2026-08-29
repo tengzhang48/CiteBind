@@ -5,22 +5,27 @@ prose, one real open-access reference (hard-coded from the Crossref record
 archived at ``spike/reference_source_crossref.json`` — never from memory,
 never from the network), two citation controls for it, one bibliography.
 
-``check_spike`` grades returned files probe by probe (dev plan §6, T-06):
-PASS/FAIL per probe, naming exactly what survived. The only baseline it may
-assume is the fixture this module itself generates.
+``check_spike`` grades returned files probe by probe. Design rules come from
+the review note of 2026-08-29 (F1/F2): files are identified by the names the
+instructions promise, never inferred from content; every probe reads its own
+evidence file where one exists; every row states which file it read, which
+fact decided the verdict, and what it could not determine. A verdict may only
+cite evidence that could have come out the other way.
 """
 
 import copy
-import zipfile
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional, Sequence, Union
 
-from .controls import insert_bibliography, insert_citation
+from .controls import (
+    insert_bibliography,
+    insert_citation,
+    read_document_root_hardened,
+    scan_document_controls,
+)
 from .model import CiteBindDocument, CitationCluster, Reference
 from .part import embed, extract
-from .verify import inspect
-from .xmlsafe import parse_xml_hardened
 
 W_NS = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
 
@@ -59,7 +64,13 @@ PROSE = [
     "This short document is used to check how citations behave during ordinary editing.",
 ]
 
-SPIKE_DOCX_NAME = "spike_v1.docx"
+# The four names the instructions promise, and the role each plays.
+MAIN_NAME = "spike_v1.docx"
+STEP1_NAME = "step1_reopened.docx"
+PASTED_NAME = "pasted.docx"
+RENAMED_NAME = "spike_renamed.docx"
+
+SPIKE_DOCX_NAME = MAIN_NAME
 
 
 def _baseline_document() -> CiteBindDocument:
@@ -109,191 +120,371 @@ class ProbeRow:
     name: str
     verdict: str  # "PASS" | "FAIL"
     detail: str
+    file_read: Optional[str] = None  # (a) which file this row graded
+    cannot_determine: Optional[str] = None  # (c) what this row could not know
 
 
 @dataclass
 class SpikeReport:
     rows: list[ProbeRow] = field(default_factory=list)
+    classification: list[str] = field(default_factory=list)
 
     @property
     def all_passed(self) -> bool:
         return bool(self.rows) and all(row.verdict == "PASS" for row in self.rows)
 
 
-def _citation_controls(docx_path):
-    with zipfile.ZipFile(docx_path) as source:
-        root = parse_xml_hardened(source.read("word/document.xml"))
-    citations = []
-    bibliography = []
-    for sdt in root.iter(_q("sdt")):
-        tag_el = sdt.find(f"{_q('sdtPr')}/{_q('tag')}")
-        tag = tag_el.get(_q("val")) if tag_el is not None else ""
-        if tag == "citebind:bibliography":
-            content = sdt.find(_q("sdtContent"))
-            text = "".join(t.text or "" for t in content.iter(_q("t"))) if content is not None else ""
-            bibliography.append(text)
-        elif tag.startswith("citebind:citation:"):
-            content = sdt.find(_q("sdtContent"))
-            text = "".join(t.text or "" for t in content.iter(_q("t"))) if content is not None else ""
-            citations.append((tag, text))
-    return citations, bibliography
+def _scan_file(path: Path):
+    """(citation texts, bibliography entries) via the shared hardened scanner."""
+    root = read_document_root_hardened(path)
+    citations: list[tuple[str, str]] = []
+    bibliography_entries: list[str] = []
+    for sc in scan_document_controls(root):
+        if sc.kind == "citation":
+            citations.append((sc.tag, sc.text))
+        elif sc.kind == "bibliography":
+            bibliography_entries.extend(sc.entries)
+    return citations, bibliography_entries
 
 
-def _has_tracked_changes(docx_path) -> bool:
-    with zipfile.ZipFile(docx_path) as source:
-        root = parse_xml_hardened(source.read("word/document.xml"))
+def _payload_matches(path: Path) -> bool:
+    try:
+        return extract(path) == _baseline_document()
+    except Exception:
+        return False
+
+
+def _classify(paths: Sequence[Union[str, Path]]):
+    """Map each returned file to its role by the name the instructions promise.
+
+    Content-based inference is exactly what mislabeled the F2 run: whether a
+    clipboard paste carries the payload is probe 4's question, not a
+    classification signal. Duplicate or unrecognized names are reported, not
+    silently resolved.
+    """
+    roles: dict[str, Optional[Path]] = {
+        MAIN_NAME: None,
+        STEP1_NAME: None,
+        PASTED_NAME: None,
+        RENAMED_NAME: None,
+    }
+    unrecognized: list[str] = []
+    for raw in paths:
+        path = Path(raw)
+        name = path.name
+        if not path.exists():
+            unrecognized.append(
+                f"{name} — passed but the file does not exist at {path}; "
+                "it was not graded"
+            )
+        elif name in roles:
+            if roles[name] is not None:
+                unrecognized.append(f"{name} (returned twice; grading the first, ignoring {path})")
+            else:
+                roles[name] = path
+        else:
+            unrecognized.append(
+                f"{name} — not one of the four names the instructions "
+                "promise; it was not graded"
+            )
+    return roles, unrecognized
+
+
+def check_spike(paths: Sequence[Union[str, Path]]) -> SpikeReport:
+    """Grade the returned files probe by probe.
+
+    Evidence sources are independent where the workflow allows it: P1 reads
+    only the step-1 save-as copy, P4 only pasted.docx, P6 only the save-as
+    copy. P2, P3 and P5 necessarily read the end-state spike_v1.docx — each
+    of their rows says so.
+    """
+    roles, unrecognized = _classify(paths)
+    rows: list[ProbeRow] = []
+
+    classification: list[str] = []
+    for role_name, path in roles.items():
+        classification.append(
+            f"{path} -> graded as {role_name}" if path is not None else f"{role_name}: NOT RETURNED"
+        )
+    classification.extend(f"unrecognized: {line}" for line in unrecognized)
+
+    def missing_note(name: str) -> str:
+        note = f"{name} was not returned"
+        if unrecognized:
+            note += (
+                "; returned file(s) that could not be classified: "
+                + "; ".join(line.split(" — ")[0] for line in unrecognized)
+            )
+        return note
+
+    main: Optional[Path] = roles[MAIN_NAME]
+    step1: Optional[Path] = roles[STEP1_NAME]
+    pasted: Optional[Path] = roles[PASTED_NAME]
+    renamed: Optional[Path] = roles[RENAMED_NAME]
+
+    main_citations, main_bib = _scan_file(main) if main else ([], [])
+
+    # --- P1: graded ONLY on the step-1 save-as copy --------------------------
+    if step1 is None:
+        rows.append(
+            ProbeRow(
+                probe="P1",
+                name="open, save, close, reopen — payload and citations survive",
+                verdict="FAIL",
+                detail=(
+                    f"{missing_note(STEP1_NAME)}; step 1 of the instructions "
+                    "asks for this Save As copy, so the open/save/reopen cycle "
+                    "could not be graded on its own evidence"
+                ),
+                file_read=None,
+            )
+        )
+    else:
+        payload_ok = _payload_matches(step1)
+        citations, bib = _scan_file(step1)
+        texts_ok = bool(citations) and all(
+            text == BASELINE_CITATION_TEXT for _tag, text in citations
+        )
+        ok = payload_ok and len(citations) >= 2 and bool(bib) and texts_ok
+        rows.append(
+            ProbeRow(
+                probe="P1",
+                name="open, save, close, reopen — payload and citations survive",
+                verdict="PASS" if ok else "FAIL",
+                detail=(
+                    f"deciding facts in {STEP1_NAME}: payload "
+                    f"{'matches baseline' if payload_ok else 'missing or altered'}; "
+                    f"{len(citations)} citation control(s) with text(s) "
+                    f"{[text for _tag, text in citations]}; "
+                    f"bibliography {'present' if bib else 'missing'}"
+                ),
+                file_read=str(step1),
+            )
+        )
+
+    # --- P2: visible text layer on the end-state main document ----------------
+    if main is None:
+        rows.append(
+            ProbeRow(
+                probe="P2",
+                name="ordinary prose edit — visible text stays intact and readable",
+                verdict="FAIL",
+                detail=missing_note(MAIN_NAME),
+                file_read=None,
+            )
+        )
+    else:
+        texts_ok = bool(main_citations) and all(
+            text == BASELINE_CITATION_TEXT for _tag, text in main_citations
+        )
+        bib_ok = any(entry.strip() for entry in main_bib)
+        rows.append(
+            ProbeRow(
+                probe="P2",
+                name="ordinary prose edit — visible text stays intact and readable",
+                verdict="PASS" if (texts_ok and bib_ok) else "FAIL",
+                detail=(
+                    f"deciding fact in {MAIN_NAME}: citation visible text(s) "
+                    f"{[text for _tag, text in main_citations]} "
+                    f"{'match' if texts_ok else 'DO NOT match'} baseline "
+                    f"{BASELINE_CITATION_TEXT!r}; bibliography text "
+                    f"{'present' if bib_ok else 'missing'}"
+                ),
+                file_read=str(main),
+                cannot_determine=(
+                    "this row grades the end-state document, which also "
+                    "contains the step-3 paste and the step-5 tracked edit; "
+                    "a failure here cannot be attributed to step 2 alone"
+                ),
+            )
+        )
+
+    # --- P3: the paste within the document ------------------------------------
+    if main is None:
+        rows.append(
+            ProbeRow(
+                probe="P3",
+                name="copy citation within the same document — a third control appears",
+                verdict="FAIL",
+                detail=missing_note(MAIN_NAME),
+                file_read=None,
+            )
+        )
+    else:
+        count = len(main_citations)
+        rows.append(
+            ProbeRow(
+                probe="P3",
+                name="copy citation within the same document — a third control appears",
+                verdict="PASS" if count >= 3 else "FAIL",
+                detail=(
+                    f"deciding fact in {MAIN_NAME}: found {count} citation "
+                    "control(s), need at least 3 (2 original + 1 pasted copy)"
+                ),
+                file_read=str(main),
+                cannot_determine=(
+                    "if step 3 was skipped, this row fails without any Word "
+                    "defect; the count cannot tell performed-and-lost from "
+                    "not-performed"
+                ),
+            )
+        )
+
+    # --- P4: the cross-document paste, on its own file ------------------------
+    if pasted is None:
+        rows.append(
+            ProbeRow(
+                probe="P4",
+                name="copy citation into a new blank document — control travels",
+                verdict="FAIL",
+                detail=(
+                    f"{missing_note(PASTED_NAME)}; step 4 of the "
+                    "instructions asks for this file"
+                ),
+                file_read=None,
+            )
+        )
+    else:
+        pasted_citations, _bib = _scan_file(pasted)
+        nonempty = [text for _tag, text in pasted_citations if text.strip()]
+        pasted_payload_state = _payload_file_exists(pasted)
+        rows.append(
+            ProbeRow(
+                probe="P4",
+                name="copy citation into a new blank document — control travels",
+                verdict="PASS" if nonempty else "FAIL",
+                detail=(
+                    f"deciding fact in {PASTED_NAME}: {len(pasted_citations)} "
+                    f"tagged citation control(s) with text(s) "
+                    f"{[text for _tag, text in pasted_citations]}; "
+                    f"payload part {pasted_payload_state}"
+                ),
+                file_read=str(pasted),
+            )
+        )
+
+    # --- P5: Track Changes, on the end-state main document --------------------
+    if main is None:
+        rows.append(
+            ProbeRow(
+                probe="P5",
+                name="edit next to a citation with Track Changes on — control survives",
+                verdict="FAIL",
+                detail=missing_note(MAIN_NAME),
+                file_read=None,
+            )
+        )
+    else:
+        tracked = _has_tracked_changes(main)
+        controls_ok = len(main_citations) >= 2 and all(
+            text == BASELINE_CITATION_TEXT for _tag, text in main_citations
+        )
+        if not tracked:
+            rows.append(
+                ProbeRow(
+                    probe="P5",
+                    name="edit next to a citation with Track Changes on — control survives",
+                    verdict="FAIL",
+                    detail=(
+                        f"deciding fact in {MAIN_NAME}: no tracked edits "
+                        "(w:ins/w:del) found — step 5 was not performed or the "
+                        "revisions were not saved"
+                    ),
+                    file_read=str(main),
+                    cannot_determine=(
+                        "absence of revisions cannot distinguish 'step skipped' "
+                        "from 'Word discarded the revisions'"
+                    ),
+                )
+            )
+        else:
+            rows.append(
+                ProbeRow(
+                    probe="P5",
+                    name="edit next to a citation with Track Changes on — control survives",
+                    verdict="PASS" if controls_ok else "FAIL",
+                    detail=(
+                        f"deciding fact in {MAIN_NAME}: tracked edits present; "
+                        f"{len(main_citations)} citation control(s) "
+                        f"{'with intact text' if controls_ok else 'lost or altered'}"
+                    ),
+                    file_read=str(main),
+                )
+            )
+
+    # --- P6: the save-as copy, on its own file ---------------------------------
+    if renamed is None:
+        rows.append(
+            ProbeRow(
+                probe="P6",
+                name="save-as under a new name — everything intact in the copy",
+                verdict="FAIL",
+                detail=(
+                    f"{missing_note(RENAMED_NAME)}; step 6 of the "
+                    "instructions asks for this file"
+                ),
+                file_read=None,
+            )
+        )
+    else:
+        renamed_payload_ok = _payload_matches(renamed)
+        renamed_citations, renamed_bib = _scan_file(renamed)
+        texts_ok = len(renamed_citations) >= 2 and all(
+            text == BASELINE_CITATION_TEXT for _tag, text in renamed_citations
+        )
+        ok = renamed_payload_ok and texts_ok and bool(renamed_bib)
+        rows.append(
+            ProbeRow(
+                probe="P6",
+                name="save-as under a new name — everything intact in the copy",
+                verdict="PASS" if ok else "FAIL",
+                detail=(
+                    f"deciding facts in {RENAMED_NAME}: payload "
+                    f"{'matches baseline' if renamed_payload_ok else 'missing or altered'}; "
+                    f"{len(renamed_citations)} citation control(s) with text(s) "
+                    f"{[text for _tag, text in renamed_citations]}; "
+                    f"bibliography {'present' if renamed_bib else 'missing'}"
+                ),
+                file_read=str(renamed),
+            )
+        )
+
+    return SpikeReport(rows=rows, classification=classification)
+
+
+def _payload_file_exists(path: Path) -> str:
+    """The payload state of a file, as a plain three-state fact.
+
+    Reported for pasted.docx because whether the library travels with a
+    clipboard paste is the open question probe 4 exists to answer; the
+    verdict never depends on it and no outcome is pre-labeled expected.
+    """
+    try:
+        payload = extract(path)
+    except Exception:
+        return "present but unreadable"
+    return "present" if payload is not None else "absent"
+
+
+def _has_tracked_changes(path: Path) -> bool:
+    root = read_document_root_hardened(path)
     return (
         len(list(root.iter(_q("ins")))) > 0
         or len(list(root.iter(_q("del")))) > 0
     )
 
 
-def check_spike(
-    main_path: Union[str, Path],
-    extra_paths: Sequence[Union[str, Path]] = (),
-) -> SpikeReport:
-    """Grade the returned main file and any extra returned files, per probe."""
-    rows: list[ProbeRow] = []
-    main_path = Path(main_path)
-
-    payload = extract(main_path) if main_path.exists() else None
-    citations, bibliography = _citation_controls(main_path)
-    structure = inspect(main_path)
-    prose_readable = len(structure.control_tags) >= 2
-    citation_count = len(citations)
-    texts_ok = all(
-        text == BASELINE_CITATION_TEXT for _tag, text in citations
-    )
-    payload_ok = payload == _baseline_document()
-
-    rows.append(
-        ProbeRow(
-            probe="P1",
-            name="open, save, close, reopen — payload and citations survive",
-            verdict="PASS" if (payload_ok and citation_count >= 2 and bibliography) else "FAIL",
-            detail=(
-                f"payload {'matches' if payload_ok else 'missing or altered'}; "
-                f"{citation_count} citation control(s); "
-                f"bibliography {'present' if bibliography else 'missing'}"
-            ),
-        )
-    )
-
-    rows.append(
-        ProbeRow(
-            probe="P2",
-            name="ordinary prose edit in an untouched paragraph — text stays readable",
-            verdict="PASS" if (payload is not None and texts_ok and prose_readable) else "FAIL",
-            detail=(
-                f"citation text {'unchanged' if texts_ok else 'unexpected'}: "
-                f"{[text for _tag, text in citations]}"
-            ),
-        )
-    )
-
-    rows.append(
-        ProbeRow(
-            probe="P3",
-            name="copy citation within the same document — a third control appears",
-            verdict="PASS" if citation_count >= 3 else "FAIL",
-            detail=f"found {citation_count} citation control(s), need at least 3",
-        )
-    )
-
-    # classify extras
-    pasted_path: Optional[Path] = None
-    renamed_path: Optional[Path] = None
-    for extra in extra_paths:
-        extra = Path(extra)
-        extra_payload = extract(extra)
-        extra_citations, _bib = _citation_controls(extra)
-        if extra_payload is not None and renamed_path is None:
-            renamed_path = extra
-        elif extra_citations and pasted_path is None:
-            pasted_path = extra
-
-    if pasted_path is None:
-        rows.append(
-            ProbeRow(
-                probe="P4",
-                name="copy citation into a new blank document — control travels",
-                verdict="FAIL",
-                detail="no returned file contains a pasted citation without a payload",
-            )
-        )
-    else:
-        pasted_citations, _bib = _citation_controls(pasted_path)
-        texts = [text for _tag, text in pasted_citations]
-        rows.append(
-            ProbeRow(
-                probe="P4",
-                name="copy citation into a new blank document — control travels",
-                verdict="PASS" if any(text for text in texts) else "FAIL",
-                detail=(
-                    f"{len(pasted_citations)} citation control(s) in the pasted "
-                    f"document, text(s) {texts}; note: the embedded reference "
-                    "library does not travel with a clipboard paste (expected)"
-                ),
-            )
-        )
-
-    if not _has_tracked_changes(main_path):
-        rows.append(
-            ProbeRow(
-                probe="P5",
-                name="edit next to a citation with Track Changes on — control survives",
-                verdict="FAIL",
-                detail="no tracked edits found in the returned document; "
-                "redo probe 5 with Track Changes turned on",
-            )
-        )
-    else:
-        rows.append(
-            ProbeRow(
-                probe="P5",
-                name="edit next to a citation with Track Changes on — control survives",
-                verdict="PASS" if (payload_ok and citation_count >= 2) else "FAIL",
-                detail=f"tracked edits present; {citation_count} citation control(s) intact",
-            )
-        )
-
-    if renamed_path is None:
-        rows.append(
-            ProbeRow(
-                probe="P6",
-                name="save-as under a new name — everything intact in the copy",
-                verdict="FAIL",
-                detail="no save-as copy found among the returned files",
-            )
-        )
-    else:
-        renamed_payload = extract(renamed_path)
-        renamed_citations, renamed_bib = _citation_controls(renamed_path)
-        ok = (
-            renamed_payload == _baseline_document()
-            and len(renamed_citations) >= 2
-            and bool(renamed_bib)
-        )
-        rows.append(
-            ProbeRow(
-                probe="P6",
-                name="save-as under a new name — everything intact in the copy",
-                verdict="PASS" if ok else "FAIL",
-                detail=f"{renamed_path.name}: payload "
-                f"{'matches' if renamed_payload == _baseline_document() else 'altered'}; "
-                f"{len(renamed_citations)} citation control(s); "
-                f"bibliography {'present' if renamed_bib else 'missing'}",
-            )
-        )
-
-    return SpikeReport(rows=rows)
-
-
 def render_spike_report(report: SpikeReport) -> str:
-    lines = ["probe  verdict  detail", "-----  ------  ------"]
+    lines = ["files graded:"]
+    lines.extend(f"  {line}" for line in report.classification)
+    lines.append("")
+    lines.append("probe  verdict  detail")
+    lines.append("-----  ------  ------")
     for row in report.rows:
         lines.append(f"{row.probe:<6} {row.verdict:<7} {row.name}")
         lines.append(f"{'':<6} {'':<7} {row.detail}")
+        if row.cannot_determine:
+            lines.append(f"{'':<6} {'':<7} note: {row.cannot_determine}")
     lines.append(
         "overall: ALL PROBES PASS" if report.all_passed else "overall: FAILURES PRESENT"
     )

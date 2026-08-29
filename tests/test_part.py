@@ -202,3 +202,35 @@ def test_reembed_reuses_same_slot_and_updates_payload(base_docx, tmp_path):
     assert used_first == used_second
     assert extract(second) == payload_doc()
     assert zipfile.ZipFile(second).namelist().count("customXml/item2.xml") == 1
+
+
+# --- F4: two payload parts is a named refusal, not a coin flip -----------------
+
+
+def test_two_payload_parts_are_refused_by_name(base_docx, tmp_path):
+    out = tmp_path / "one.docx"
+    embed(base_docx, payload_doc(), out)
+    dual = tmp_path / "dual.docx"
+    with zipfile.ZipFile(out) as zin, zipfile.ZipFile(dual, "w", zipfile.ZIP_DEFLATED) as zout:
+        for item in zin.infolist():
+            zout.writestr(item.filename, zin.read(item.filename))
+        # a second citebind payload part, as if a tool had cloned the slot
+        zout.writestr("customXml/item4.xml", zipfile.ZipFile(out).read(citebind_part_name(out)))
+    with pytest.raises(PayloadError) as exc_info:
+        extract(dual)
+    assert exc_info.value.code == "multiple_payload_parts"
+
+
+def test_inspect_reports_ambiguous_payload_as_finding(base_docx, tmp_path):
+    from citebind.verify import FindingKind, inspect
+
+    out = tmp_path / "one.docx"
+    embed(base_docx, payload_doc(), out)
+    dual = tmp_path / "dual.docx"
+    with zipfile.ZipFile(out) as zin, zipfile.ZipFile(dual, "w", zipfile.ZIP_DEFLATED) as zout:
+        for item in zin.infolist():
+            zout.writestr(item.filename, zin.read(item.filename))
+        zout.writestr("customXml/item4.xml", zipfile.ZipFile(out).read(citebind_part_name(out)))
+    report = inspect(dual)
+    assert FindingKind.PAYLOAD_INVALID in [f.kind for f in report.findings]
+    assert any("multiple_payload_parts" in f.detail for f in report.findings)
