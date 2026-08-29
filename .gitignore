@@ -1,0 +1,19 @@
+# Word lock/temp files
+~$*.doc*
+*.tmp
+
+# Node / Office add-in tooling (added ahead of Phase 1)
+node_modules/
+dist/
+build/
+*.log
+.env
+.env.local
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editors
+.vscode/
+.idea/
