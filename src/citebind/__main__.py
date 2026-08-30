@@ -6,6 +6,7 @@ import zipfile
 
 from .spike import check_spike, make_spike, render_spike_report
 from .verify import diff, inspect, render_diff, render_report
+from .xmlsafe import UnsafeXML
 
 
 def main(argv=None) -> int:
@@ -38,16 +39,21 @@ def main(argv=None) -> int:
 
     args = parser.parse_args(argv)
 
-    # File-level input problems get a clean message, not a traceback. Logic
-    # errors (PayloadError, SchemaError, anything else) still propagate: this
-    # guard must never mask a bug in the library.
+    # File-level input problems get a clean message, not a traceback. This
+    # includes UnsafeXML: a document whose XML the hardened parser refuses is
+    # a bad-input condition, not a library bug. Logic errors (SchemaError,
+    # PayloadError, anything else) still propagate: this guard must never
+    # mask a bug in the library.
     try:
         return _run(args, parser)
-    except (OSError, zipfile.BadZipFile, KeyError) as error:
-        target = getattr(args, "docx", None) or getattr(args, "before", None) or (
-            args.files if args.command == "check-spike" else None
-        )
-        print(f"error: cannot read {target}: {error}", file=sys.stderr)
+    except (OSError, zipfile.BadZipFile, KeyError, UnsafeXML) as error:
+        if args.command == "make-spike":
+            target = args.out
+        else:
+            target = getattr(args, "docx", None) or getattr(args, "before", None) or (
+                args.files if args.command == "check-spike" else None
+            )
+        print(f"error: {target}: {error}", file=sys.stderr)
         return 2
 
 

@@ -502,5 +502,6 @@ def test_cli_gives_clean_error_not_traceback_for_non_docx(tmp_path, capsys):
     bad.write_text("not a docx")
     assert main(["inspect", str(bad)]) == 2
     err = capsys.readouterr().err
-    assert err.startswith("error: cannot read")
+    # message names the file and the problem; never a traceback
+    assert err.startswith("error:") and "notes.txt" in err
     assert "Traceback" not in err
