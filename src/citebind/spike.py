@@ -171,6 +171,8 @@ def _readability_error(path: Path) -> Optional[str]:
             data = source.read("word/document.xml")
     except zipfile.BadZipFile:
         return "was returned but is not a readable DOCX (wrong save format, or damaged)"
+    except OSError:
+        return "was returned but could not be opened (not a regular file, or permission denied)"
     except KeyError:
         return "was returned but is a zip archive with no word/document.xml part"
     try:
@@ -196,6 +198,7 @@ def _classify(paths: Sequence[Union[str, Path]]):
     }
     unrecognized: list[str] = []
     unreadable: dict[str, str] = {}
+    promised = {name.lower(): name for name in roles}
     for raw in paths:
         path = Path(raw)
         name = path.name
@@ -204,15 +207,16 @@ def _classify(paths: Sequence[Union[str, Path]]):
                 f"{name} — passed but the file does not exist at {path}; "
                 "it was not graded"
             )
-        elif name in roles:
-            if roles[name] is not None:
+        elif name.lower() in promised:
+            role_name = promised[name.lower()]
+            if roles[role_name] is not None:
                 unrecognized.append(f"{name} (returned twice; grading the first, ignoring {path})")
             else:
                 error = _readability_error(path)
                 if error is not None:
-                    unreadable[name] = error
+                    unreadable[role_name] = error
                 else:
-                    roles[name] = path
+                    roles[role_name] = path
         else:
             unrecognized.append(
                 f"{name} — not one of the four names the instructions "

@@ -378,3 +378,28 @@ def test_corrupt_file_with_promised_name_is_reported_not_crashing(tmp_path):
     assert row(report, "P4").file_read is None
     # the healthy file is still graded (step1 absent -> P1 fails as not returned)
     assert row(report, "P2").verdict == "PASS"
+
+
+def test_directory_with_promised_name_is_reported_not_crashing(tmp_path):
+    # A directory named pasted.docx must degrade to a plain statement
+    # (IsADirectoryError is an OSError, and humans pass directories).
+    main = make_spike(tmp_path)
+    (tmp_path / "pasted.docx").mkdir()
+    report = check_spike([main, tmp_path / "pasted.docx"])
+    assert "was returned but could not be opened" in row(report, "P4").detail
+    assert row(report, "P2").verdict == "PASS"  # healthy file still graded
+
+
+def test_promised_names_match_case_insensitively(tmp_path):
+    # Windows and macOS filesystems are case-insensitive by default; a
+    # returned PASTED.DOCX is the promised pasted.docx. This is still
+    # name-based classification, not content inference.
+    files = build_returned_files(tmp_path, include_pasted=False)
+    pasted = tmp_path / "PASTED.DOCX"
+    document = Document()
+    document.add_paragraph("Blah ")
+    insert_citation(document.paragraphs[0], "C001", "[1]")
+    document.save(pasted)
+    report = check_spike(files + [pasted])
+    assert row(report, "P4").file_read.endswith("PASTED.DOCX")
+    assert row(report, "P4").verdict == "PASS"

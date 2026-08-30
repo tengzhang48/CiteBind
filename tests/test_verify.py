@@ -495,3 +495,12 @@ def test_cli_diff_exit_codes(clean_spike, tmp_path, capsys):
     assert main(["diff", str(clean_spike), str(damaged)]) == 1
     out = capsys.readouterr().out
     assert "control_text_altered" in out
+
+
+def test_cli_gives_clean_error_not_traceback_for_non_docx(tmp_path, capsys):
+    bad = tmp_path / "notes.txt"
+    bad.write_text("not a docx")
+    assert main(["inspect", str(bad)]) == 2
+    err = capsys.readouterr().err
+    assert err.startswith("error: cannot read")
+    assert "Traceback" not in err

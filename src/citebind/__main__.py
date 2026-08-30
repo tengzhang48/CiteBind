@@ -2,6 +2,7 @@
 
 import argparse
 import sys
+import zipfile
 
 from .spike import check_spike, make_spike, render_spike_report
 from .verify import diff, inspect, render_diff, render_report
@@ -37,6 +38,20 @@ def main(argv=None) -> int:
 
     args = parser.parse_args(argv)
 
+    # File-level input problems get a clean message, not a traceback. Logic
+    # errors (PayloadError, SchemaError, anything else) still propagate: this
+    # guard must never mask a bug in the library.
+    try:
+        return _run(args, parser)
+    except (OSError, zipfile.BadZipFile, KeyError) as error:
+        target = getattr(args, "docx", None) or getattr(args, "before", None) or (
+            args.files if args.command == "check-spike" else None
+        )
+        print(f"error: cannot read {target}: {error}", file=sys.stderr)
+        return 2
+
+
+def _run(args, parser):
     if args.command == "inspect":
         report = inspect(args.docx)
         print(render_report(report, args.docx))
