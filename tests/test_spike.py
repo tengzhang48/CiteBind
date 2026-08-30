@@ -361,3 +361,20 @@ def test_nonexistent_file_is_reported_not_crashing(tmp_path):
     )
     # the recognized files are still graded
     assert row(report, "P1").verdict == "PASS"
+
+
+def test_corrupt_file_with_promised_name_is_reported_not_crashing(tmp_path):
+    # Same class as the nonexistent-path bug, one level deeper: a file with
+    # a promised name that is not a DOCX (wrong save format / damaged) must
+    # produce a plain statement, never a traceback — and per the review
+    # note's rule, "returned but unreadable" is distinct from "not returned".
+    from citebind.spike import make_spike as make
+
+    main = make(tmp_path)
+    corrupt = tmp_path / "pasted.docx"
+    corrupt.write_text("Saved as plain text, renamed to .docx")
+    report = check_spike([main, corrupt])
+    assert "was returned but is not a readable DOCX" in row(report, "P4").detail
+    assert row(report, "P4").file_read is None
+    # the healthy file is still graded (step1 absent -> P1 fails as not returned)
+    assert row(report, "P2").verdict == "PASS"

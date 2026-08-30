@@ -154,13 +154,39 @@ def _payload_matches(path: Path) -> bool:
         return False
 
 
+def _readability_error(path: Path) -> Optional[str]:
+    """Why this file cannot be graded, or None if it can be.
+
+    Classification probes readability: a file with a promised name that is
+    not a readable DOCX must be reported as exactly that — the review note's
+    rule that "could not classify" and "did not return" are different
+    statements applies to damaged files too.
+    """
+    import zipfile
+
+    from .xmlsafe import parse_xml_hardened
+
+    try:
+        with zipfile.ZipFile(path) as source:
+            data = source.read("word/document.xml")
+    except zipfile.BadZipFile:
+        return "was returned but is not a readable DOCX (wrong save format, or damaged)"
+    except KeyError:
+        return "was returned but is a zip archive with no word/document.xml part"
+    try:
+        parse_xml_hardened(data)
+    except Exception as error:
+        return f"was returned but its document.xml was refused: {error}"
+    return None
+
+
 def _classify(paths: Sequence[Union[str, Path]]):
     """Map each returned file to its role by the name the instructions promise.
 
     Content-based inference is exactly what mislabeled the F2 run: whether a
     clipboard paste carries the payload is probe 4's question, not a
-    classification signal. Duplicate or unrecognized names are reported, not
-    silently resolved.
+    classification signal. Duplicate, unrecognized, and unreadable names are
+    reported, not silently resolved.
     """
     roles: dict[str, Optional[Path]] = {
         MAIN_NAME: None,
@@ -169,6 +195,7 @@ def _classify(paths: Sequence[Union[str, Path]]):
         RENAMED_NAME: None,
     }
     unrecognized: list[str] = []
+    unreadable: dict[str, str] = {}
     for raw in paths:
         path = Path(raw)
         name = path.name
@@ -181,13 +208,17 @@ def _classify(paths: Sequence[Union[str, Path]]):
             if roles[name] is not None:
                 unrecognized.append(f"{name} (returned twice; grading the first, ignoring {path})")
             else:
-                roles[name] = path
+                error = _readability_error(path)
+                if error is not None:
+                    unreadable[name] = error
+                else:
+                    roles[name] = path
         else:
             unrecognized.append(
                 f"{name} — not one of the four names the instructions "
                 "promise; it was not graded"
             )
-    return roles, unrecognized
+    return roles, unrecognized, unreadable
 
 
 def check_spike(paths: Sequence[Union[str, Path]]) -> SpikeReport:
@@ -198,7 +229,7 @@ def check_spike(paths: Sequence[Union[str, Path]]) -> SpikeReport:
     copy. P2, P3 and P5 necessarily read the end-state spike_v1.docx — each
     of their rows says so.
     """
-    roles, unrecognized = _classify(paths)
+    roles, unrecognized, unreadable = _classify(paths)
     rows: list[ProbeRow] = []
 
     classification: list[str] = []
@@ -207,13 +238,18 @@ def check_spike(paths: Sequence[Union[str, Path]]) -> SpikeReport:
             f"{path} -> graded as {role_name}" if path is not None else f"{role_name}: NOT RETURNED"
         )
     classification.extend(f"unrecognized: {line}" for line in unrecognized)
+    classification.extend(f"{name}: {reason}" for name, reason in unreadable.items())
 
     def missing_note(name: str) -> str:
+        if name in unreadable:
+            return f"{name} {unreadable[name]}"
         note = f"{name} was not returned"
-        if unrecognized:
+        ungraded = [line.split(" — ")[0] for line in unrecognized] + [
+            n for n in unreadable if n != name
+        ]
+        if ungraded:
             note += (
-                "; returned file(s) that could not be classified: "
-                + "; ".join(line.split(" — ")[0] for line in unrecognized)
+                "; returned file(s) that could not be graded: " + "; ".join(ungraded)
             )
         return note
 
