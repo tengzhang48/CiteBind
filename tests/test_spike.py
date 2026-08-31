@@ -13,6 +13,8 @@ file; every row names the file it read and the fact that decided it.
 import copy
 import socket
 import zipfile
+
+import pytest
 from pathlib import Path
 
 from docx import Document
@@ -244,16 +246,21 @@ def test_f1_step5_payload_loss_must_not_fail_p1(tmp_path):
     # The regression the review note demands: a defect introduced at step 5
     # (payload lost during the Track Changes save) must NOT fail P1 — P1 is
     # graded on its own step-1 artifact, which is intact here.
+    #
+    # Update per review round 2 (R1): the loss is caught by P7, which OWNS
+    # the end-state payload of the working document. P6's failure is a
+    # second, expected consequence (its save-as copy derives from the
+    # damaged main) — it is no longer the mechanism that saves us, and it
+    # must never be: P6 is absent whenever step 6 is skipped.
     files = build_returned_files(tmp_path, payload_loss_at_end=True)
     report = check_spike(files)
     verdicts = {r.probe: r.verdict for r in report.rows}
     assert verdicts["P1"] == "PASS", row(report, "P1").detail
-    # the loss IS caught, by the probe that owns the end state:
-    assert verdicts["P6"] == "FAIL"
-    assert "payload missing or altered" in row(report, "P6").detail
+    assert verdicts["P7"] == "FAIL"
+    assert "payload" in row(report, "P7").detail
+    assert verdicts["P6"] == "FAIL"  # derived copy, second consequence
     # P2 and P5 grade the visible layer, which survived; their rows say
-    # exactly that instead of borrowing payload evidence (old P5 printed
-    # FAIL above a detail claiming everything was intact)
+    # exactly that instead of borrowing payload evidence
     assert verdicts["P2"] == "PASS", row(report, "P2").detail
     assert verdicts["P5"] == "PASS"
     assert "tracked edits present" in row(report, "P5").detail
@@ -261,6 +268,74 @@ def test_f1_step5_payload_loss_must_not_fail_p1(tmp_path):
     for r in report.rows:
         if r.verdict == "FAIL":
             assert "deciding fact" in r.detail or "was not returned" in r.detail
+
+
+def test_r1_payload_loss_with_step6_skipped_is_not_silent(tmp_path):
+    # The regression review round 2 (R1) is built on: payload lost in
+    # spike_v1.docx, step 6 skipped entirely. The visible layer is green;
+    # before P7 existed this produced an all-green report on a document
+    # whose embedded library — the entire Phase 1 hypothesis — was gone,
+    # with the only complaint being a missing file. Proven red on the
+    # pre-P7 head; P7 must catch it.
+    files = build_returned_files(
+        tmp_path, payload_loss_at_end=True, include_renamed=False
+    )
+    report = check_spike(files)
+    verdicts = {r.probe: r.verdict for r in report.rows}
+    # the visible layer is green, exactly as in the red reproduction:
+    assert verdicts["P1"] == "PASS"
+    assert verdicts["P2"] == "PASS"
+    assert verdicts["P3"] == "PASS"
+    assert verdicts["P5"] == "PASS"
+    # ...and P7 is the row that refuses to be silent about it:
+    assert verdicts["P7"] == "FAIL"
+    assert "payload" in row(report, "P7").detail
+    assert "steps 2, 3 and 5" in row(report, "P7").cannot_determine
+    assert report.all_passed is False
+
+
+def test_r2_dual_payload_diagnosis_reaches_the_row(tmp_path):
+    # R2: F4's refusal names both offending parts; the row must carry that
+    # diagnosis instead of flattening it to "missing or altered".
+    main = make_spike(tmp_path)
+    with zipfile.ZipFile(main) as z:
+        with zipfile.ZipFile(tmp_path / "dual.docx", "w", zipfile.ZIP_DEFLATED) as zout:
+            for item in z.infolist():
+                zout.writestr(item.filename, z.read(item.filename))
+            from citebind.part import find_citebind_part
+
+            citebind_part = find_citebind_part(z)
+            zout.writestr("customXml/item4.xml", z.read(citebind_part))
+    step1 = resave(make_spike(tmp_path / "s1"), "step1_reopened.docx")
+    # move the dual into the main role
+    (tmp_path / "dual.docx").rename(tmp_path / "spike_v1.docx")
+    report = check_spike([
+        tmp_path / "spike_v1.docx",
+        step1,
+    ])
+    p7 = row(report, "P7")
+    assert p7.verdict == "FAIL"
+    assert "multiple_payload_parts" in p7.detail
+    assert "item2" in p7.detail and "item4" in p7.detail
+    # and the healthy step-1 artifact is unaffected by the dual main:
+    p1 = row(report, "P1")
+    assert p1.verdict == "PASS"
+    assert "matches baseline" in p1.detail
+
+
+def test_r2_unnamed_errors_propagate(tmp_path, monkeypatch):
+    # R2: the narrow catch must not swallow genuine bugs. An AttributeError
+    # inside extract is a bug, and it must escape check_spike loudly.
+    import citebind.spike as spike_module
+
+    main = make_spike(tmp_path)
+
+    def broken_extract(path):
+        raise AttributeError("a genuine bug, planted")
+
+    monkeypatch.setattr(spike_module, "extract", broken_extract)
+    with pytest.raises(AttributeError):
+        check_spike([main])
 
 
 def test_f2_paste_retaining_payload_is_still_classified_as_paste(tmp_path):

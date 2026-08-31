@@ -25,16 +25,16 @@ import pytest
 
 from citebind.__main__ import main
 from citebind.controls import find_controls
-from citebind.part import PayloadError, extract
-from citebind.schema import SchemaError
-from citebind.spike import make_spike
+from citebind.part import extract
+from citebind.spike import NAMED_INPUT_ERRORS, make_spike
 from citebind.verify import inspect
-from citebind.xmlsafe import UnsafeXML
 
-# The library may raise exactly these error FAMILIES for bad input.
-# isinstance, not name-matching: FileNotFoundError/IsADirectoryError/
-# PermissionError are OSError subclasses and are named members of this set.
-NAMED_ERRORS = (PayloadError, UnsafeXML, SchemaError, zipfile.BadZipFile, OSError, KeyError)
+# The library may raise exactly these error FAMILIES for bad input. The
+# tuple is owned at runtime by citebind.spike (the one place that must
+# catch them); the gauntlet holds the library to it. isinstance, not
+# name-matching: FileNotFoundError/IsADirectoryError/PermissionError are
+# OSError subclasses and are named members of this set.
+NAMED_ERRORS = NAMED_INPUT_ERRORS
 
 
 def make_zip(path: Path, entries: dict) -> None:

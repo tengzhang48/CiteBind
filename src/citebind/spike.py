@@ -14,6 +14,7 @@ cite evidence that could have come out the other way.
 """
 
 import copy
+import zipfile
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional, Sequence, Union
@@ -25,7 +26,9 @@ from .controls import (
     scan_document_controls,
 )
 from .model import CiteBindDocument, CitationCluster, Reference
-from .part import embed, extract
+from .part import PayloadError, embed, extract
+from .schema import SchemaError
+from .xmlsafe import UnsafeXML, parse_xml_hardened
 
 W_NS = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
 
@@ -147,11 +150,24 @@ def _scan_file(path: Path):
     return citations, bibliography_entries
 
 
-def _payload_matches(path: Path) -> bool:
+# The named input-error families the gauntlet pins
+# (tests/test_input_gauntlet.py imports this tuple as its contract). Catch
+# these where a verdict is rendered and carry their diagnosis into the row;
+# let anything else propagate as the bug it is (review note R2).
+NAMED_INPUT_ERRORS = (PayloadError, UnsafeXML, SchemaError, zipfile.BadZipFile, OSError, KeyError)
+
+
+def _payload_status(path: Path) -> tuple[bool, str]:
+    """(matches_baseline, human detail). Named input errors become detail text.
+
+    The refusal's own diagnosis travels into the row: a dual-payload package
+    reports what F4's refusal says, not a generic "missing or altered".
+    """
     try:
-        return extract(path) == _baseline_document()
-    except Exception:
-        return False
+        matches = extract(path) == _baseline_document()
+    except NAMED_INPUT_ERRORS as error:
+        return False, f"payload unreadable: {error}"
+    return matches, "payload matches baseline" if matches else "payload does not match baseline"
 
 
 def _readability_error(path: Path) -> Optional[str]:
@@ -162,10 +178,6 @@ def _readability_error(path: Path) -> Optional[str]:
     rule that "could not classify" and "did not return" are different
     statements applies to damaged files too.
     """
-    import zipfile
-
-    from .xmlsafe import parse_xml_hardened
-
     try:
         with zipfile.ZipFile(path) as source:
             data = source.read("word/document.xml")
@@ -177,7 +189,7 @@ def _readability_error(path: Path) -> Optional[str]:
         return "was returned but is a zip archive with no word/document.xml part"
     try:
         parse_xml_hardened(data)
-    except Exception as error:
+    except UnsafeXML as error:
         return f"was returned but its document.xml was refused: {error}"
     return None
 
@@ -280,7 +292,7 @@ def check_spike(paths: Sequence[Union[str, Path]]) -> SpikeReport:
             )
         )
     else:
-        payload_ok = _payload_matches(step1)
+        payload_ok, payload_detail = _payload_status(step1)
         citations, bib = _scan_file(step1)
         texts_ok = bool(citations) and all(
             text == BASELINE_CITATION_TEXT for _tag, text in citations
@@ -292,8 +304,7 @@ def check_spike(paths: Sequence[Union[str, Path]]) -> SpikeReport:
                 name="open, save, close, reopen — payload and citations survive",
                 verdict="PASS" if ok else "FAIL",
                 detail=(
-                    f"deciding facts in {STEP1_NAME}: payload "
-                    f"{'matches baseline' if payload_ok else 'missing or altered'}; "
+                    f"deciding facts in {STEP1_NAME}: {payload_detail}; "
                     f"{len(citations)} citation control(s) with text(s) "
                     f"{[text for _tag, text in citations]}; "
                     f"bibliography {'present' if bib else 'missing'}"
@@ -467,7 +478,7 @@ def check_spike(paths: Sequence[Union[str, Path]]) -> SpikeReport:
             )
         )
     else:
-        renamed_payload_ok = _payload_matches(renamed)
+        renamed_payload_ok, renamed_payload_detail = _payload_status(renamed)
         renamed_citations, renamed_bib = _scan_file(renamed)
         texts_ok = len(renamed_citations) >= 2 and all(
             text == BASELINE_CITATION_TEXT for _tag, text in renamed_citations
@@ -479,13 +490,44 @@ def check_spike(paths: Sequence[Union[str, Path]]) -> SpikeReport:
                 name="save-as under a new name — everything intact in the copy",
                 verdict="PASS" if ok else "FAIL",
                 detail=(
-                    f"deciding facts in {RENAMED_NAME}: payload "
-                    f"{'matches baseline' if renamed_payload_ok else 'missing or altered'}; "
+                    f"deciding facts in {RENAMED_NAME}: {renamed_payload_detail}; "
                     f"{len(renamed_citations)} citation control(s) with text(s) "
                     f"{[text for _tag, text in renamed_citations]}; "
                     f"bibliography {'present' if renamed_bib else 'missing'}"
                 ),
                 file_read=str(renamed),
+            )
+        )
+
+    # --- P7: the embedded library in the working document (review note R1) ----
+    # P2/P3/P5 grade the visible layer of spike_v1.docx; before this row, the
+    # payload of the document the human actually worked in was checked only
+    # via P6's derived copy — a coincidence that goes silent when step 6 is
+    # skipped. This row owns the end-state payload.
+    if main is None:
+        rows.append(
+            ProbeRow(
+                probe="P7",
+                name="the embedded reference library survives in the working document",
+                verdict="FAIL",
+                detail=missing_note(MAIN_NAME),
+                file_read=None,
+            )
+        )
+    else:
+        payload_ok, payload_detail = _payload_status(main)
+        rows.append(
+            ProbeRow(
+                probe="P7",
+                name="the embedded reference library survives in the working document",
+                verdict="PASS" if payload_ok else "FAIL",
+                detail=f"deciding fact in {MAIN_NAME}: {payload_detail}",
+                file_read=str(main),
+                cannot_determine=(
+                    "graded on the working document after steps 2, 3 and 5; "
+                    "a failure implicates those steps jointly and cannot be "
+                    "narrowed further"
+                ),
             )
         )
 
@@ -501,8 +543,8 @@ def _payload_file_exists(path: Path) -> str:
     """
     try:
         payload = extract(path)
-    except Exception:
-        return "present but unreadable"
+    except NAMED_INPUT_ERRORS as error:
+        return f"present but unreadable: {error}"
     return "present" if payload is not None else "absent"
 
 
