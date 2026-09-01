@@ -39,6 +39,43 @@ def test_spike_record_maps_to_the_exact_baseline_reference():
     assert ref == Reference.from_dict(BASELINE_REFERENCE)
 
 
+def test_two_recordings_days_apart_map_to_one_reference(tmp_path):
+    # The oracle claim, made explicit: the raw response archived on
+    # 2026-08-29 and the independent recording made on 2026-08-31 both map
+    # to the same Reference (modulo retrieved_at). Two fetches, four days
+    # apart, agreeing through the resolver is what makes the hard-coded
+    # constant trustworthy rather than merely consistent.
+    import json
+
+    from citebind.transport import ReplayTransport as RT
+
+    archive = Path(__file__).parent.parent / "spike" / "reference_source_crossref.json"
+    url = "https://api.crossref.org/works/10.2147/prom.s8896"
+    (tmp_path / "MANIFEST.json").write_text(
+        json.dumps(
+            {
+                "recordings": [
+                    {"url": url, "file": str(archive.resolve()), "status": 200}
+                ]
+            }
+        )
+    )
+    old_ref = resolve_doi(
+        url.split("/works/")[1], RT(tmp_path / "MANIFEST.json"), reference_id="R001",
+        retrieved_at="2026-08-29T00:00:00Z",
+    )
+    fresh_ref = resolve_doi(
+        ORACLE_DOI, recordings(), reference_id="R001",
+        retrieved_at="2026-08-31T00:00:00Z",
+    )
+    strip = lambda ref: {k: v for k, v in ref.to_dict().items() if k != "retrieved_at"}
+    assert strip(old_ref) == strip(fresh_ref)
+    assert old_ref == Reference.from_dict(BASELINE_REFERENCE)
+    assert fresh_ref == Reference.from_dict(
+        {**BASELINE_REFERENCE, "retrieved_at": "2026-08-31T00:00:00Z"}
+    )
+
+
 def test_resolver_accepts_url_and_prefixed_spellings_via_canonical_form():
     # normalization happens before the URL is built, so every spelling of
     # the DOI resolves through the same recorded response
