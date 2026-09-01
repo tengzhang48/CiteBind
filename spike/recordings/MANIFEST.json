@@ -22,18 +22,23 @@
       "source": "crossref"
     },
     {
+      "url": "https://api.crossref.org/works?query.bibliographic=Perspectives%20on%20electronic%20medical%20records%20adoption%3A%20electronic%20medical%20records%20%28EMR%29%20in%20outcomes%20research&rows=5&select=DOI,title,author,container-title,volume,issue,page,published",
+      "file": "crossref-https___api.crossref.org_works_query.bibliographic_Perspectives_20on_20electronic_20medical_20records_20adoption_3A_20electroni-8f884e46c4a3.json",
+      "source": "crossref"
+    },
+    {
       "url": "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi?db=pubmed&retmode=json&term=Perspectives%20on%20electronic%20medical%20records%20adoption%3A%20electronic%20medical%20records%20%28EMR%29%20in%20outcomes%20research",
-      "file": "pubmed-https___eutils.ncbi.nlm.nih.gov_entrez_eutils_esearch.fcgi?db=pubmed&retmode=json&term=perspectives%20on%20electronic%20medical%20records%20adoption%3a%20electronic%20medical%20records%20%28emr%29%20in%20outcomes%20research.json",
+      "file": "pubmed-https___eutils.ncbi.nlm.nih.gov_entrez_eutils_esearch.fcgi_db_pubmed_retmode_json_term_Perspectives_20on_20electronic_20medical-9d69fd1e92e7.json",
       "source": "pubmed"
     },
     {
       "url": "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esummary.fcgi?db=pubmed&retmode=json&id=42130696,41525750,40598237,40119379,38222081,36722464,40198015,29444228,22578085,22915950",
-      "file": "pubmed-https___eutils.ncbi.nlm.nih.gov_entrez_eutils_esummary.fcgi?db=pubmed&retmode=json&id=42130696,41525750,40598237,40119379,38222081,36722464,40198015,29444228,22578085,22915950.json",
+      "file": "pubmed-https___eutils.ncbi.nlm.nih.gov_entrez_eutils_esummary.fcgi_db_pubmed_retmode_json_id_42130696_41525750_40598237_40119379_38222-4f51c3d8fa32.json",
       "source": "pubmed"
     },
     {
       "url": "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esummary.fcgi?db=pubmed&retmode=json&id=22915950",
-      "file": "pubmed-https___eutils.ncbi.nlm.nih.gov_entrez_eutils_esummary.fcgi?db=pubmed&retmode=json&id=22915950.json",
+      "file": "pubmed-https___eutils.ncbi.nlm.nih.gov_entrez_eutils_esummary.fcgi_db_pubmed_retmode_json_id_22915950.json",
       "source": "pubmed"
     }
   ]

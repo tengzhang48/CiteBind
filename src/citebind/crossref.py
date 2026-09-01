@@ -12,6 +12,7 @@ said it, ``retrieved_at`` records when. The timestamp is a parameter, not
 a clock — the resolver is a pure mapping and tests stay deterministic.
 """
 
+import urllib.parse
 from typing import Optional
 
 from .identifiers import normalize_doi
@@ -25,6 +26,16 @@ from .transport import (
 )
 
 CROSSREF_URL = "https://api.crossref.org/works/{doi}"
+SELECT_WORK_FIELDS = "DOI,title,author,container-title,volume,issue,page,published"
+
+
+def title_search_url(title: str, rows: int = 5) -> str:
+    """The Crossref URL for an exact-title query (shared with the recorder)."""
+    return (
+        "https://api.crossref.org/works"
+        f"?query.bibliographic={urllib.parse.quote(title, safe='')}"
+        f"&rows={rows}&select={SELECT_WORK_FIELDS}"
+    )
 
 
 class ResponseShapeError(ResponseError):
@@ -69,8 +80,11 @@ def _author_names(message: dict) -> list[str]:
     return names
 
 
-def _extract(message: dict) -> dict:
-    """Crossref work message to a citebind/1 reference dict (id omitted)."""
+def work_to_fields(message: dict) -> dict:
+    """Crossref work message to a citebind/1 metadata dict (id/doi omitted).
+
+    Public because the title-search layer reuses it for every candidate.
+    """
     title = _first_text(message.get("title"))
     journal = _first_text(message.get("container-title"))
     year = _year(message)
@@ -127,7 +141,7 @@ def resolve_doi(
     url = CROSSREF_URL.format(doi=canonical)
     message = _message(transport.fetch(url), canonical)
 
-    fields = _extract(message)
+    fields = work_to_fields(message)
     return Reference.from_dict(
         {"id": reference_id, "doi": canonical, "retrieved_at": retrieved_at, **fields}
     )

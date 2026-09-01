@@ -80,7 +80,11 @@ def _journal(doc: dict) -> Optional[str]:
     return _first_text(doc.get("source"))
 
 
-def _extract(pmid: str, doc: dict) -> dict:
+def summary_to_fields(pmid: str, doc: dict) -> dict:
+    """PubMed esummary document to a citebind/1 metadata dict (id/pmid omitted).
+
+    Public because the title-search layer reuses it for every candidate.
+    """
     title = _first_text(doc.get("title"))
     journal = _journal(doc)
     year = _year(doc)
@@ -136,7 +140,7 @@ def resolve_pmid(
     url = PUBMED_SUMMARY_URL.format(pmid=canonical)
     doc = _summary(transport.fetch(url), canonical)
 
-    fields = _extract(canonical, doc)
+    fields = summary_to_fields(canonical, doc)
     return Reference.from_dict(
         {"id": reference_id, "pmid": canonical, "retrieved_at": retrieved_at, **fields}
     )

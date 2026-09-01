@@ -23,6 +23,7 @@ Target selection (all selected from live API responses, never from memory):
   thus sourced from PubMed, not typed from memory.
 """
 
+import hashlib
 import json
 import sys
 import urllib.request
@@ -30,6 +31,19 @@ from pathlib import Path
 
 RECORDINGS_DIR = Path(__file__).parent / "recordings"
 USER_AGENT = "CiteBind-recording/0.1 (mailto:example@example.org)"
+
+
+def slug(text: str) -> str:
+    """A filename-safe slug: safe characters, and short enough for the FS.
+
+    Query URLs are long, so long inputs keep a hash suffix for uniqueness
+    while the head stays human-readable.
+    """
+    safe = "".join(c if c.isalnum() or c in "._-" else "_" for c in text)
+    if len(safe) > 140:
+        digest = hashlib.sha256(text.encode()).hexdigest()[:12]
+        safe = f"{safe[:127]}-{digest}"
+    return safe
 
 CROSSREF_DOIS = [
     "10.2147/prom.s8896",
@@ -53,10 +67,6 @@ def fetch(url: str) -> bytes:
         return response.read()
 
 
-def slug(text: str) -> str:
-    return text.replace("/", "_").replace(":", "_").lower()
-
-
 def main() -> int:
     force = "--force" in sys.argv
     RECORDINGS_DIR.mkdir(parents=True, exist_ok=True)
@@ -78,6 +88,15 @@ def main() -> int:
     for doi in CROSSREF_DOIS:
         url = f"https://api.crossref.org/works/{doi}"
         record(url, fetch(url), source="crossref")
+
+    # --- Crossref title search (for the candidate-list fixtures) ------------
+    from citebind.crossref import title_search_url
+
+    record(
+        title_search_url(TITLE_FOR_PMID),
+        fetch(title_search_url(TITLE_FOR_PMID)),
+        source="crossref",
+    )
 
     # --- PubMed: PMID from PubMed's own esearch on the exact title ----------
     # PubMed's relevance ranking can put other papers first, so the script
