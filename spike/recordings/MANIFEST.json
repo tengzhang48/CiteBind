@@ -7,13 +7,18 @@
       "source": "crossref"
     },
     {
-      "url": "https://api.crossref.org/works/10.22541/au.161220228.87275329/v1",
-      "file": "crossref-https___api.crossref.org_works_10.22541_au.161220228.87275329_v1.json",
+      "url": "https://api.crossref.org/works/10.1177/29768659261469390",
+      "file": "crossref-https___api.crossref.org_works_10.1177_29768659261469390.json",
       "source": "crossref"
     },
     {
       "url": "https://api.crossref.org/works/10.1103/physrevlett.116.061102",
       "file": "crossref-https___api.crossref.org_works_10.1103_physrevlett.116.061102.json",
+      "source": "crossref"
+    },
+    {
+      "url": "https://api.crossref.org/works/10.22541/au.161220228.87275329/v1",
+      "file": "crossref-https___api.crossref.org_works_10.22541_au.161220228.87275329_v1.json",
       "source": "crossref"
     },
     {

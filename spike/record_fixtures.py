@@ -33,8 +33,12 @@ USER_AGENT = "CiteBind-recording/0.1 (mailto:example@example.org)"
 
 CROSSREF_DOIS = [
     "10.2147/prom.s8896",
-    "10.22541/au.161220228.87275329/v1",
+    # genuinely missing volume/issue/pages, required fields present
+    # (selected from a Crossref journal-article query, 2026-08-31)
+    "10.1177/29768659261469390",
     "10.1103/physrevlett.116.061102",
+    # missing the journal (container-title) entirely: the refusal fixture
+    "10.22541/au.161220228.87275329/v1",
 ]
 
 TITLE_FOR_PMID = (
