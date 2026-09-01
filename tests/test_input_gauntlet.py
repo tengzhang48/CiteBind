@@ -138,3 +138,97 @@ def test_cli_inspect_unsafe_xml_is_named_not_traceback(tmp_path, capsys):
     assert rc == 2
     assert "doctype_declared" in err
     assert "Traceback" not in err
+
+
+# --- Phase 2 response-level input classes (T-08) ---------------------------------
+# The same contract as above, extended to the transport seam: bad responses
+# are refused by name and never crash.
+
+import socket
+import urllib.error
+
+from citebind.transport import (
+    TransportError,
+    CODE_CONNECTION_ERROR,
+    CODE_EMPTY_RESULT,
+    CODE_HTTP_ERROR,
+    CODE_MALFORMED_JSON,
+    CODE_TIMEOUT,
+    CODE_URL_NOT_RECORDED,
+    ReplayTransport,
+    ResponseError,
+    TransportResponse,
+    check_status,
+    classify_urlopen_error,
+    decode_json,
+    require_non_empty,
+)
+
+_RESPONSE_CLASSES = {
+    "http_404": (TransportResponse(404, b'{"status": "error"}'), CODE_HTTP_ERROR),
+    "http_500": (TransportResponse(500, b"<html>boom</html>"), CODE_HTTP_ERROR),
+    "malformed_json": (TransportResponse(200, b"{not json"), CODE_MALFORMED_JSON),
+}
+
+
+@pytest.mark.parametrize("kind", sorted(_RESPONSE_CLASSES))
+def test_bad_responses_are_refused_by_name(kind):
+    response, expected_code = _RESPONSE_CLASSES[kind]
+    if kind.startswith("http_"):
+        with pytest.raises(ResponseError) as e:
+            check_status(response, source="crossref")
+    else:
+        with pytest.raises(ResponseError) as e:
+            decode_json(response, source="crossref")
+    assert e.value.code == expected_code
+
+
+def test_empty_result_set_refused_by_name():
+    with pytest.raises(ResponseError) as e:
+        require_non_empty([], source="crossref", what="title search")
+    assert e.value.code == CODE_EMPTY_RESULT
+
+
+def test_timeout_classified_by_name():
+    error = classify_urlopen_error(socket.timeout("timed out"))
+    assert isinstance(error, TransportError)
+    assert error.code == CODE_TIMEOUT
+
+
+def test_connection_error_classified_by_name():
+    error = classify_urlopen_error(
+        urllib.error.URLError(reason=ConnectionRefusedError(111, "refused"))
+    )
+    assert isinstance(error, TransportError)
+    assert error.code == CODE_CONNECTION_ERROR
+
+
+def test_replay_unknown_url_named(tmp_path):
+    manifest = tmp_path / "MANIFEST.json"
+    manifest.write_text(_json.dumps({"recordings": []}))
+    with pytest.raises(TransportError) as e:
+        ReplayTransport(manifest).fetch("https://api.crossref.org/works/9.9/none")
+    assert e.value.code == CODE_URL_NOT_RECORDED
+
+
+def test_replay_corrupt_manifest_named(tmp_path):
+    path = tmp_path / "MANIFEST.json"
+    path.write_text("{not json")
+    with pytest.raises(TransportError) as e:
+        ReplayTransport(path)
+    assert e.value.code == "malformed_manifest"
+
+
+import json as _json
+
+
+def test_response_error_codes_all_distinct():
+    codes = {
+        CODE_HTTP_ERROR,
+        CODE_MALFORMED_JSON,
+        CODE_EMPTY_RESULT,
+        CODE_TIMEOUT,
+        CODE_CONNECTION_ERROR,
+        CODE_URL_NOT_RECORDED,
+    }
+    assert len(codes) == 6

@@ -1,0 +1,35 @@
+{
+  "recorded_with": "spike/record_fixtures.py",
+  "recordings": [
+    {
+      "url": "https://api.crossref.org/works/10.2147/prom.s8896",
+      "file": "crossref-https___api.crossref.org_works_10.2147_prom.s8896.json",
+      "source": "crossref"
+    },
+    {
+      "url": "https://api.crossref.org/works/10.22541/au.161220228.87275329/v1",
+      "file": "crossref-https___api.crossref.org_works_10.22541_au.161220228.87275329_v1.json",
+      "source": "crossref"
+    },
+    {
+      "url": "https://api.crossref.org/works/10.1103/physrevlett.116.061102",
+      "file": "crossref-https___api.crossref.org_works_10.1103_physrevlett.116.061102.json",
+      "source": "crossref"
+    },
+    {
+      "url": "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi?db=pubmed&retmode=json&term=Perspectives%20on%20electronic%20medical%20records%20adoption%3A%20electronic%20medical%20records%20%28EMR%29%20in%20outcomes%20research",
+      "file": "pubmed-https___eutils.ncbi.nlm.nih.gov_entrez_eutils_esearch.fcgi?db=pubmed&retmode=json&term=perspectives%20on%20electronic%20medical%20records%20adoption%3a%20electronic%20medical%20records%20%28emr%29%20in%20outcomes%20research.json",
+      "source": "pubmed"
+    },
+    {
+      "url": "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esummary.fcgi?db=pubmed&retmode=json&id=42130696,41525750,40598237,40119379,38222081,36722464,40198015,29444228,22578085,22915950",
+      "file": "pubmed-https___eutils.ncbi.nlm.nih.gov_entrez_eutils_esummary.fcgi?db=pubmed&retmode=json&id=42130696,41525750,40598237,40119379,38222081,36722464,40198015,29444228,22578085,22915950.json",
+      "source": "pubmed"
+    },
+    {
+      "url": "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esummary.fcgi?db=pubmed&retmode=json&id=22915950",
+      "file": "pubmed-https___eutils.ncbi.nlm.nih.gov_entrez_eutils_esummary.fcgi?db=pubmed&retmode=json&id=22915950.json",
+      "source": "pubmed"
+    }
+  ]
+}
