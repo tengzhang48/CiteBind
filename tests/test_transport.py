@@ -149,3 +149,24 @@ def test_all_transport_and_response_codes_are_distinct():
         CODE_EMPTY_RESULT,
     }
     assert len(codes) == 6
+
+
+def test_recorder_uses_the_production_transport_not_a_second_one():
+    # N1 pin: the recorder once carried its own urllib fetch with a
+    # different User-Agent, so fixtures were recorded over a path
+    # production never executes. It must go through HttpTransport.
+    import re
+    from pathlib import Path
+
+    source = (
+        Path(__file__).parent.parent / "spike" / "record_fixtures.py"
+    ).read_text()
+    assert "urllib.request" not in source, (
+        "the recorder grew its own HTTP implementation again"
+    )
+    assert "HttpTransport" in source
+    # one User-Agent, defined once, used by the transport the recorder takes
+    transport_source = (
+        Path(__file__).parent.parent / "src" / "citebind" / "transport.py"
+    ).read_text()
+    assert len(re.findall(r"User-Agent", transport_source)) == 1

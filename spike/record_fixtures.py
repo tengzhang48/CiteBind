@@ -26,11 +26,11 @@ Target selection (all selected from live API responses, never from memory):
 import hashlib
 import json
 import sys
-import urllib.request
 from pathlib import Path
 
+from citebind.transport import HttpTransport
+
 RECORDINGS_DIR = Path(__file__).parent / "recordings"
-USER_AGENT = "CiteBind-recording/0.1 (mailto:example@example.org)"
 
 
 def slug(text: str) -> str:
@@ -61,10 +61,15 @@ TITLE_FOR_PMID = (
 )
 
 
+_TRANSPORT = HttpTransport(timeout=30.0)
+
+
 def fetch(url: str) -> bytes:
-    request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
-    with urllib.request.urlopen(request, timeout=30) as response:
-        return response.read()
+    """Fetch over the same HttpTransport production uses (review note N1):
+    fixtures must come from the code path that will serve readers, with the
+    same User-Agent, or the recordings are not necessarily what production
+    would have been handed. Returns the raw body bytes, unmodified."""
+    return _TRANSPORT.fetch(url).body
 
 
 def main() -> int:

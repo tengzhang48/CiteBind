@@ -79,15 +79,26 @@ def classify_urlopen_error(error: Exception) -> TransportError:
     return TransportError(CODE_CONNECTION_ERROR, f"request failed: {error}")
 
 
+# FIXME(driver): the mailto is a PLACEHOLDER. Crossref routes polite-pool
+# traffic on a reachable contact address; the real one is the user's to
+# give. Flagged for the driver rather than invented (review note N1).
+USER_AGENT = (
+    "CiteBind/0.1 (https://github.com/tengzhang48/CiteBind; "
+    "mailto:example@example.org)"
+)
+
+
 class HttpTransport:
     """Real HTTP via urllib, with a timeout. Used in production and by the
-    recording script only — never by tests."""
+    recording script — the same code path that produced every fixture in
+    spike/recordings/ (consolidated per review note N1; never used by
+    tests, which run on ReplayTransport)."""
 
     def __init__(self, timeout: float = 30.0):
         self.timeout = timeout
 
     def fetch(self, url: str) -> TransportResponse:
-        request = urllib.request.Request(url, headers={"User-Agent": _USER_AGENT})
+        request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
         try:
             with urllib.request.urlopen(request, timeout=self.timeout) as response:
                 return TransportResponse(
@@ -158,5 +169,3 @@ def require_non_empty(items, source: str, what: str) -> None:
             f"{what} returned no results from {source}",
         )
 
-
-_USER_AGENT = "CiteBind/0.1 (https://github.com/tengzhang48/CiteBind; mailto:example@example.org)"
