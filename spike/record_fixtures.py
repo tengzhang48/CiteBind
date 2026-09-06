@@ -8,8 +8,13 @@ note 2026-08-31, T-08). Run it by hand, on purpose:
 
 It fetches each target below and writes the RAW, UNMODIFIED response bytes
 into ``spike/recordings/``, plus a MANIFEST.json mapping each URL to its
-file. The raw bytes are the provenance for every downstream assertion —
-never reformat, never "clean up", never edit a recording.
+file, the UTC time its bytes were written, and the User-Agent they were
+fetched under. The raw bytes are the provenance for every downstream
+assertion — never reformat, never "clean up", never edit a recording.
+
+A manifest written before 2026-09-06 carries no ``retrieved_at`` or
+``user_agent``: those fields start here and are never backfilled, because a
+retrieval time nobody recorded is a retrieval time nobody knows.
 
 Target selection (all selected from live API responses, never from memory):
 - 10.2147/prom.s8896 — the CiteBind spike reference (Belletti 2010)
@@ -26,9 +31,10 @@ Target selection (all selected from live API responses, never from memory):
 import hashlib
 import json
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
-from citebind.transport import HttpTransport
+from citebind.transport import USER_AGENT, HttpTransport
 
 RECORDINGS_DIR = Path(__file__).parent / "recordings"
 
@@ -85,7 +91,19 @@ def main() -> int:
         filename = f"{source}-{slug(url)}.json"
         target = RECORDINGS_DIR / filename
         target.write_bytes(body)  # raw bytes, unmodified
-        recordings.append({"url": url, "file": filename, "source": source})
+        recordings.append(
+            {
+                "url": url,
+                "file": filename,
+                "source": source,
+                # stamped as the bytes hit disk. The manifest has to carry
+                # its own retrieval time: file mtimes do not survive a copy,
+                # a checkout, or a zip, and this is the provenance record.
+                "retrieved_at": datetime.now(timezone.utc).isoformat(
+                    timespec="seconds"
+                ),
+            }
+        )
         print(f"recorded {url} -> {filename} ({len(body)} bytes)")
         return filename
 
@@ -152,6 +170,9 @@ def main() -> int:
 
     manifest = {
         "recorded_with": "spike/record_fixtures.py",
+        # the contact address these requests actually went out under, so a
+        # recording made under a placeholder mailto is visible as such
+        "user_agent": USER_AGENT,
         "recordings": recordings,
     }
     manifest_path.write_text(json.dumps(manifest, indent=2) + "\n")

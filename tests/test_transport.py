@@ -165,8 +165,13 @@ def test_recorder_uses_the_production_transport_not_a_second_one():
         "the recorder grew its own HTTP implementation again"
     )
     assert "HttpTransport" in source
-    # one User-Agent, defined once, used by the transport the recorder takes
+    # one User-Agent, defined once, used by the transport the recorder takes.
+    # Counted where it is DEFINED and where it is SENT, not where the words
+    # appear: this assertion used to count every occurrence of the text, so
+    # a docstring explaining the header read as a second User-Agent. Prose
+    # about a header is a mention; these two lines are the header.
     transport_source = (
         Path(__file__).parent.parent / "src" / "citebind" / "transport.py"
     ).read_text()
-    assert len(re.findall(r"User-Agent", transport_source)) == 1
+    assert len(re.findall(r"(?m)^USER_AGENT = ", transport_source)) == 1
+    assert len(re.findall(r'headers=\{"User-Agent"', transport_source)) == 1

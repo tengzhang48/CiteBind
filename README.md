@@ -9,8 +9,10 @@ saved, emailed, reopened on another machine, or handed to a coauthor who has
 never installed CiteBind — and every citation-to-reference relationship is
 still recoverable, with no external library, account, or sync service.
 
-> **Status: pre-implementation.** This repository currently contains the
-> development plan only. No add-in code has been written. See
+> **Status: Phase 2 complete, Phase 1 unfinished.** The resolver library and
+> the Phase 1 spike kit are implemented and tested (246 tests, on the
+> `phase1-spike` branch). No Word add-in code has been written, and Phase 1's
+> exit condition still needs a human running the spike document in Word. See
 > [§ Current status](#current-status).
 
 ## The problem
@@ -136,23 +138,38 @@ implementer/driver protocol -- is in
 
 ## Current status
 
-Nothing is implemented. The immediate next action is the **Phase 1 persistence
-spike** and nothing else:
+**Implemented** (Python, on the `phase1-spike` branch): identifier
+normalization; the transport seam, meaning live HTTP plus a replay transport
+backed by recorded raw API responses; Crossref and PubMed resolvers; structured
+cross-source comparison; title search that returns candidates and never a
+selection; the `citebind/1` custom XML part; tagged content controls; the
+Phase 1 spike kit (`make-spike` and `check-spike`); and an `inspect` / `diff`
+CLI. 246 tests, all passing.
 
-- embed one hard-coded, DOI-resolved reference in custom XML;
-- insert one tagged citation content control and one tagged bibliography
-  control;
-- save, close Word, reopen, and recover the reference-to-citation relationship;
-- confirm a collaborator without CiteBind can still read the document normally;
-- copy a citation cluster into a second document, and edit adjacent to a
-  cluster with Track Changes enabled.
+**Not implemented: the add-in itself.** There is no Office.js project. The
+Python above is a resolver library and a document-inspection kit — it can write
+and read a DOCX carrying `citebind/1` structures, but nothing runs inside Word.
+
+**Phase 2 is complete**, accepted in review on 2026-09-02: no stored reference
+depends on model-generated identity. **Phase 3** — deterministic citation and
+bibliography — is scoped and decided (citeproc-py, pinned, with vendored CSL
+styles) and not started.
+
+**Phase 1's exit condition is still unmet, and it is the blocking item.** It
+needs a human in Word for about five minutes:
+
+- generate the spike document: `python -m citebind make-spike`;
+- follow [`spike/SPIKE_INSTRUCTIONS.md`](spike/SPIKE_INSTRUCTIONS.md) — save
+  and reopen, edit around a citation, copy one within the document, copy one
+  into a new document, and edit next to one with Track Changes on;
+- return the four files: `python -m citebind check-spike <files...>`.
 
 That spike answers the highest-risk question — whether tagged citations and
-their embedded reference data survive real Word editing and handoff — before
-any substantial product development begins. The last two probes are pulled
-forward from Phase 4 deliberately: if content controls do not survive
-cross-document paste or Track Changes, the `citebind/1` contract itself needs
-rethinking, and that is much cheaper to learn now than after Phase 3.
+their embedded reference data survive real Word editing and handoff. Until it
+runs, the `citebind/1` contract is not settled; it is unexamined. The
+cross-document paste and Track Changes probes are pulled forward from Phase 4
+deliberately: if content controls do not survive them, the contract itself
+needs rethinking, and that is much cheaper to learn now than after Phase 3.
 
 ## Development discipline
 
