@@ -31,7 +31,11 @@ REFERENCE_REQUIRED_KEYS = {
     "metadata_source",
     "retrieved_at",
 }
-REFERENCE_OPTIONAL_KEYS = {"doi", "pmid", "volume", "issue", "pages"}
+REFERENCE_OPTIONAL_KEYS = {"doi", "pmid", "volume", "issue", "pages", "author_names"}
+# A structured name is EITHER a {family, given?} pair OR a {literal} whole
+# string. Never both: a record whose source gave us one shape must not be
+# recorded as if it gave us the other.
+AUTHOR_NAME_KEYS = {"family", "given", "literal"}
 CLUSTER_REQUIRED_KEYS = {"id", "reference_ids"}
 CLUSTER_OPTIONAL_KEYS = {"locator", "prefix", "suffix"}
 
@@ -137,12 +141,67 @@ def _validate_reference(reference: dict, seen_ids: set[str]) -> None:
             f"reference '{ref_id}' has neither DOI nor PMID",
         )
 
-    for key in REFERENCE_OPTIONAL_KEYS - {"doi", "pmid"}:
+    _validate_author_names(reference, ref_id)
+
+    for key in REFERENCE_OPTIONAL_KEYS - {"doi", "pmid", "author_names"}:
         value = reference.get(key)
         if value is not None and (not isinstance(value, str) or not value):
             raise SchemaError(
                 FIELD_INVALID, f"reference '{ref_id}': '{key}' must be a non-empty string"
             )
+
+
+def _validate_author_names(reference: dict, ref_id: str) -> None:
+    """Validate the optional structured-name list.
+
+    ``authors`` (flat display strings) stays the contract's author field.
+    ``author_names`` carries the family/given split WHEN THE SOURCE SUPPLIED
+    IT, because no style can render an author label correctly without it and
+    splitting a flat string is guesswork (T-19). It is optional precisely
+    because PubMed does not supply it; absence stays absence.
+    """
+    names = reference.get("author_names")
+    if names is None:
+        return
+    where = f"reference '{ref_id}'"
+    if not isinstance(names, list):
+        raise SchemaError(FIELD_INVALID, f"{where}: 'author_names' must be a list")
+    if len(names) != len(reference["authors"]):
+        raise SchemaError(
+            FIELD_INVALID,
+            f"{where}: 'author_names' has {len(names)} entries but 'authors' has "
+            f"{len(reference['authors'])}; the structured list must correspond "
+            "one-to-one with the display list or the two can disagree about "
+            "who wrote the paper",
+        )
+    for name in names:
+        if not isinstance(name, dict):
+            raise SchemaError(FIELD_INVALID, f"{where}: each author_name must be a mapping")
+        unknown = set(name) - AUTHOR_NAME_KEYS
+        if unknown:
+            raise SchemaError(
+                KEY_UNKNOWN_REFERENCE,
+                f"{where}: unknown author_name key(s): {', '.join(sorted(unknown))}",
+            )
+        has_literal = "literal" in name
+        has_family = "family" in name
+        if has_literal == has_family:
+            raise SchemaError(
+                FIELD_INVALID,
+                f"{where}: each author_name needs exactly one of 'literal' or "
+                "'family'",
+            )
+        if has_literal and "given" in name:
+            raise SchemaError(
+                FIELD_INVALID,
+                f"{where}: 'literal' and 'given' cannot both be present",
+            )
+        for key, value in name.items():
+            if not isinstance(value, str) or not value:
+                raise SchemaError(
+                    FIELD_INVALID,
+                    f"{where}: author_name '{key}' must be a non-empty string",
+                )
 
 
 def _validate_cluster(cluster: dict, seen_ids: set[str], reference_ids: set[str]) -> None:

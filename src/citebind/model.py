@@ -10,6 +10,39 @@ from typing import Any, Optional
 from .schema import validate_document
 
 
+@dataclass(frozen=True)
+class AuthorName:
+    """One author's name as the SOURCE gave it.
+
+    Either a ``family``/``given`` split (Crossref supplies one) or a
+    ``literal`` whole string (PubMed's "Belletti DA", and organizational
+    authors, which have no split to give). CiteBind never converts one shape
+    into the other: guessing where a given name ends and a family name begins
+    is inventing metadata, and it is wrong for particles, compound surnames,
+    and every name that does not put the family last.
+    """
+
+    family: Optional[str] = None
+    given: Optional[str] = None
+    literal: Optional[str] = None
+
+    def to_dict(self) -> dict[str, Any]:
+        if self.literal is not None:
+            return {"literal": self.literal}
+        result: dict[str, Any] = {"family": self.family}
+        if self.given is not None:
+            result["given"] = self.given
+        return result
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "AuthorName":
+        return cls(
+            family=data.get("family"),
+            given=data.get("given"),
+            literal=data.get("literal"),
+        )
+
+
 @dataclass
 class Reference:
     id: str
@@ -24,6 +57,8 @@ class Reference:
     volume: Optional[str] = None
     issue: Optional[str] = None
     pages: Optional[str] = None
+    # Present only when the metadata source supplied structured names.
+    author_names: Optional[list[AuthorName]] = None
 
     def to_dict(self) -> dict[str, Any]:
         result: dict[str, Any] = {
@@ -47,6 +82,8 @@ class Reference:
             result["issue"] = self.issue
         if self.pages is not None:
             result["pages"] = self.pages
+        if self.author_names is not None:
+            result["author_names"] = [n.to_dict() for n in self.author_names]
         return result
 
     @classmethod
@@ -64,6 +101,11 @@ class Reference:
             pages=data.get("pages"),
             metadata_source=data["metadata_source"],
             retrieved_at=data["retrieved_at"],
+            author_names=(
+                [AuthorName.from_dict(n) for n in data["author_names"]]
+                if data.get("author_names") is not None
+                else None
+            ),
         )
 
 

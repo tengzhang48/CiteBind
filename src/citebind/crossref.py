@@ -80,6 +80,34 @@ def _author_names(message: dict) -> list[str]:
     return names
 
 
+def _author_structured(message: dict) -> list[dict]:
+    """The family/given split Crossref already sends, kept instead of dropped.
+
+    Organizational authors arrive as a single ``name`` and become literals:
+    "LIGO Scientific Collaboration" has no family name to record. Ordering
+    matches :func:`_author_names` element for element, which the schema
+    enforces.
+    """
+    names: list[dict] = []
+    for author in message.get("author") or []:
+        if "name" in author:
+            names.append({"literal": author["name"]})
+        else:
+            family = author.get("family")
+            given = author.get("given")
+            if not family:
+                # No family name from the source: record what there is as a
+                # literal rather than promoting a given name to a surname.
+                if given:
+                    names.append({"literal": given})
+                continue
+            name = {"family": family}
+            if given:
+                name["given"] = given
+            names.append(name)
+    return names
+
+
 def work_to_fields(message: dict) -> dict:
     """Crossref work message to a citebind/1 metadata dict (id/doi omitted).
 
@@ -107,6 +135,9 @@ def work_to_fields(message: dict) -> dict:
         "year": year,
         "metadata_source": "crossref",
     }
+    structured = _author_structured(message)
+    if structured:
+        result["author_names"] = structured
     for field, key in (("volume", "volume"), ("issue", "issue"), ("pages", "page")):
         value = message.get(key)
         if isinstance(value, str) and value.strip():

@@ -10,6 +10,11 @@ requires-python = ">=3.11"
 dependencies = [
     "python-docx>=1.2.0",
     "lxml>=6.1",
+    # EXACT pin, deliberately. The maintainers state the API is not yet
+    # stable, so an unpinned minor release is a live grenade under every
+    # recorded rendering. Upgrading is a decision with a test run attached,
+    # not something a fresh install does silently.
+    "citeproc-py==0.11.1",
 ]
 
 [project.optional-dependencies]
@@ -17,6 +22,11 @@ dev = ["pytest>=9.0"]
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+# The vendored CSL styles and the locale oracle must ship with the package:
+# rendering reads them at runtime, and an install without them renders nothing.
+citebind = ["styles/*.csl", "styles/*.xml", "styles/MANIFEST.json"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

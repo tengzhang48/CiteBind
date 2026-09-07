@@ -9,10 +9,10 @@ saved, emailed, reopened on another machine, or handed to a coauthor who has
 never installed CiteBind — and every citation-to-reference relationship is
 still recoverable, with no external library, account, or sync service.
 
-> **Status: Phase 2 complete, Phase 1 unfinished.** The resolver library and
-> the Phase 1 spike kit are implemented and tested (246 tests, on the
-> `phase1-spike` branch). No Word add-in code has been written, and Phase 1's
-> exit condition still needs a human running the spike document in Word. See
+> **Status: Phases 2 and 3 complete, Phase 1 unfinished.** References resolve,
+> render, and verify from Python (266 tests, on the `phase1-spike` branch). No
+> Word add-in code has been written, and Phase 1's exit condition still needs a
+> human running the spike document in Word. See
 > [§ Current status](#current-status).
 
 ## The problem
@@ -142,18 +142,43 @@ implementer/driver protocol -- is in
 normalization; the transport seam, meaning live HTTP plus a replay transport
 backed by recorded raw API responses; Crossref and PubMed resolvers; structured
 cross-source comparison; title search that returns candidates and never a
-selection; the `citebind/1` custom XML part; tagged content controls; the
+selection; the `citebind/1` custom XML part; tagged content controls;
+deterministic rendering of citations and the bibliography in one numeric and
+one author–year style, with named refusals where it cannot be correct; the
 Phase 1 spike kit (`make-spike` and `check-spike`); and an `inspect` / `diff`
-CLI. 246 tests, all passing.
+CLI. 266 tests, all passing.
 
 **Not implemented: the add-in itself.** There is no Office.js project. The
 Python above is a resolver library and a document-inspection kit — it can write
 and read a DOCX carrying `citebind/1` structures, but nothing runs inside Word.
 
 **Phase 2 is complete**, accepted in review on 2026-09-02: no stored reference
-depends on model-generated identity. **Phase 3** — deterministic citation and
-bibliography — is scoped and decided (citeproc-py, pinned, with vendored CSL
-styles) and not started.
+depends on model-generated identity.
+
+**Phase 3 is implemented.** Citations and the bibliography render
+deterministically from the embedded payload through citeproc-py 0.11.1
+(exactly pinned), with `ieee.csl` and `apa.csl` vendored raw at pinned
+upstream commits. The renderer refuses, by name, four cases it cannot get
+right rather than emitting a plausible wrong citation — including two works by
+one author in one year, which real styles render 2009a/2009b and citeproc-py
+does not.
+
+Rendering closed a hole worth naming: `inspect` used to call a document clean
+while it displayed `[7]` over a payload holding one reference, because nothing
+could say what the citation *should* say. It now compares visible text against
+the payload's rendering and reports `visible_text_mismatch`. The first time
+that check ran it failed on this repository's own spike fixture, whose
+bibliography line had been hand-written in a style the payload does not
+produce; the fixture is now rendered rather than typed.
+
+That work required one contract change, which is worth arguing with: a
+reference may now carry `author_names`, the family/given split as the source
+supplied it. Crossref sends that split and CiteBind used to discard it, and
+without it *no* style renders an author label correctly — APA produced
+`(Daniel A Belletti, 2010)` and IEEE `Daniel A Belletti,` instead of
+`(Belletti, 2010)` and `D. A. Belletti,`. The field is optional because PubMed
+supplies no split at all; a PubMed-only reference is refused for rendering
+rather than having its display string guessed apart.
 
 **Phase 1's exit condition is still unmet, and it is the blocking item.** It
 needs a human in Word for about five minutes:

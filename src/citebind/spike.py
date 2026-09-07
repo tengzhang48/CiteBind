@@ -27,6 +27,7 @@ from .controls import (
 )
 from .model import CiteBindDocument, CitationCluster, Reference
 from .part import PayloadError, embed, extract
+from .rendering import render
 from .schema import SchemaError
 from .xmlsafe import UnsafeXML, parse_xml_hardened
 
@@ -48,6 +49,11 @@ BASELINE_REFERENCE: dict = {
         "electronic medical records (EMR) in outcomes research"
     ),
     "authors": ["Daniel A Belletti"],
+    # given/family exactly as the archived Crossref bytes carry them
+    # (spike/reference_source_crossref.json), never split from the flat
+    # string above. Two recordings four days apart agree on this: see
+    # tests/test_crossref.py::test_two_recordings_days_apart_map_to_one_reference.
+    "author_names": [{"family": "Belletti", "given": "Daniel A"}],
     "journal": "Patient Related Outcome Measures",
     "year": 2010,
     "pages": "29",
@@ -56,12 +62,6 @@ BASELINE_REFERENCE: dict = {
 }
 BASELINE_DOI = BASELINE_REFERENCE["doi"]
 BASELINE_CLUSTER_ID = "C001"
-BASELINE_CITATION_TEXT = "[1]"
-BASELINE_BIBLIOGRAPHY_ENTRY = (
-    "1. Belletti DA. Perspectives on electronic medical records adoption: "
-    "electronic medical records (EMR) in outcomes research. "
-    "Patient Related Outcome Measures. 2010:29."
-)
 PROSE = [
     "Open-access publishing has made individual research articles easier to reach.",
     "This short document is used to check how citations behave during ordinary editing.",
@@ -85,6 +85,18 @@ def _baseline_document() -> CiteBindDocument:
             CitationCluster(id=BASELINE_CLUSTER_ID, reference_ids=["R001"])
         ],
     )
+
+
+# The spike document's visible text is RENDERED FROM ITS PAYLOAD, never typed.
+# It used to be two hand-written constants, and the bibliography one was a
+# Vancouver-shaped string that the selected numeric style does not produce --
+# so the kit's own fixture disagreed with its own data. verify's
+# VISIBLE_TEXT_MISMATCH caught it the first time it ran (2026-09-07). A
+# hand-written citation constant is the same defect waiting to happen, so
+# there is no longer one to get wrong.
+_BASELINE_RENDERING = render(_baseline_document())
+BASELINE_CITATION_TEXT = _BASELINE_RENDERING.citations[BASELINE_CLUSTER_ID]
+BASELINE_BIBLIOGRAPHY_ENTRY = _BASELINE_RENDERING.bibliography[0]
 
 
 def make_spike(out_dir: Union[str, Path]) -> Path:

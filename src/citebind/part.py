@@ -132,6 +132,14 @@ def payload_to_xml(doc: CiteBindDocument) -> bytes:
         authors = _sub(node, "authors")
         for author in ref.authors:
             _sub(authors, "author", author)
+        if ref.author_names is not None:
+            structured = _sub(node, "author_names")
+            for name in ref.author_names:
+                name_node = _sub(structured, "name")
+                for key in ("family", "given", "literal"):
+                    value = getattr(name, key)
+                    if value is not None:
+                        _sub(name_node, key, value)
         _sub(node, "journal", ref.journal)
         _sub(node, "year", ref.year)
         for key in ("volume", "issue", "pages"):
@@ -213,6 +221,17 @@ def _reference_to_dict(node) -> dict:
         result["authors"] = [
             author.text or "" for author in authors.findall(f"{CB}author")
         ]
+    structured = node.find(f"{CB}author_names")
+    if structured is not None:
+        names = []
+        for name_node in structured.findall(f"{CB}name"):
+            name: dict = {}
+            for key in ("family", "given", "literal"):
+                child = name_node.find(f"{CB}{key}")
+                if child is not None and child.text is not None:
+                    name[key] = child.text
+            names.append(name)
+        result["author_names"] = names
     return result
 
 

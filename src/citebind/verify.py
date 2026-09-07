@@ -25,7 +25,9 @@ from typing import Optional, Union
 from lxml import etree
 
 from .controls import scan_document_controls
+from .model import CiteBindDocument
 from .part import PayloadError, find_citebind_part, payload_to_dict
+from .rendering import RenderingRefusal, render
 from .schema import (
     CLUSTER_ID_DUPLICATE,
     CLUSTER_REFERENCE_UNKNOWN,
@@ -59,6 +61,8 @@ class FindingKind(str, Enum):
     CITATION_CONTROLS_INCONSISTENT = "citation_controls_inconsistent"
     BIBLIOGRAPHY_CONTROL_MISSING = "bibliography_control_missing"
     BIBLIOGRAPHY_COUNT_MISMATCH = "bibliography_count_mismatch"
+    VISIBLE_TEXT_MISMATCH = "visible_text_mismatch"
+    RENDERING_UNAVAILABLE = "rendering_unavailable"
 
 
 _SEVERITY = {
@@ -75,6 +79,8 @@ _SEVERITY = {
     FindingKind.CITATION_CONTROLS_INCONSISTENT: "warning",
     FindingKind.BIBLIOGRAPHY_CONTROL_MISSING: "error",
     FindingKind.BIBLIOGRAPHY_COUNT_MISMATCH: "warning",
+    FindingKind.VISIBLE_TEXT_MISMATCH: "error",
+    FindingKind.RENDERING_UNAVAILABLE: "note",
 }
 
 # schema error codes that have a dedicated finding kind; any other SchemaError
@@ -149,6 +155,7 @@ class _BodyScan:
     citation_texts: dict[str, list[str]]
     bibliography_present: bool
     bibliography_entry_count: int
+    bibliography_entries: list[str]
     control_tags: list[str]
     control_texts: dict[str, list[str]]
     unrecognized_tags: list[str]
@@ -166,6 +173,7 @@ def _scan_body(root) -> _BodyScan:
         citation_texts={},
         bibliography_present=False,
         bibliography_entry_count=0,
+        bibliography_entries=[],
         control_tags=[],
         control_texts={},
         unrecognized_tags=[],
@@ -181,6 +189,7 @@ def _scan_body(root) -> _BodyScan:
         elif sc.kind == "bibliography":
             scan.bibliography_present = True
             scan.bibliography_entry_count = len(sc.entries)
+            scan.bibliography_entries = list(sc.entries)
             scan.control_tags.append(sc.tag)
             scan.control_texts.setdefault(sc.tag, []).append(sc.text)
         elif sc.kind == "unrecognized":
@@ -307,6 +316,8 @@ def inspect(docx_path: Union[str, Path]) -> Report:
                     )
                 )
 
+        findings.extend(_rendering_findings(raw, scan))
+
     for tag in scan.unrecognized_tags:
         findings.append(
             _finding(
@@ -334,6 +345,61 @@ def inspect(docx_path: Union[str, Path]) -> Report:
         inventory=scan.inventory,
         findings=findings,
     )
+
+
+def _rendering_findings(raw: dict, scan: _BodyScan) -> list[Finding]:
+    """Compare what the document SHOWS against what its payload RENDERS.
+
+    Until Phase 3 there was no answer to "what should this citation say?", so
+    a document could be structurally perfect and still show [7] over a payload
+    holding one reference, or a bibliography naming a paper the payload does
+    not contain, and every check passed. That hole is what this closes: the
+    payload is the source of truth and the visible text is derived from it, so
+    any disagreement is a finding.
+
+    A refusal from the renderer is reported as a NOTE, never swallowed: a
+    check that silently does not run is worse than one that fails, because the
+    report still reads clean.
+    """
+    try:
+        document = CiteBindDocument.from_dict(raw)
+    except (SchemaError, KeyError, TypeError):
+        # Already reported as PAYLOAD_INVALID; nothing to render from.
+        return []
+    try:
+        rendered = render(document)
+    except RenderingRefusal as refusal:
+        return [
+            _finding(
+                FindingKind.RENDERING_UNAVAILABLE,
+                f"visible text was NOT checked against rendering: {refusal}",
+            )
+        ]
+
+    findings: list[Finding] = []
+    for cluster_id, texts in sorted(scan.citation_texts.items()):
+        expected = rendered.citations.get(cluster_id)
+        if expected is None:
+            continue
+        for actual in sorted(set(texts)):
+            if actual != expected:
+                findings.append(
+                    _finding(
+                        FindingKind.VISIBLE_TEXT_MISMATCH,
+                        f"citation '{cluster_id}' shows {actual!r} but its payload "
+                        f"renders as {expected!r}",
+                    )
+                )
+    if scan.bibliography_present and scan.bibliography_entries != rendered.bibliography:
+        findings.append(
+            _finding(
+                FindingKind.VISIBLE_TEXT_MISMATCH,
+                "bibliography text does not match what the payload renders: "
+                f"shows {scan.bibliography_entries} but renders as "
+                f"{rendered.bibliography}",
+            )
+        )
+    return findings
 
 
 def _cited_reference_ids(raw: dict) -> set[str]:

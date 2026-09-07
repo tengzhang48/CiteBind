@@ -18,6 +18,7 @@ from citebind.controls import insert_bibliography, insert_citation
 from citebind.model import CiteBindDocument
 from citebind.part import embed
 from citebind.__main__ import main
+from citebind.rendering import render
 from citebind.verify import FindingKind, diff, inspect
 
 W_NS = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
@@ -36,6 +37,7 @@ PAYLOAD_DICT = {
             "doi": "10.1000/fixture-1",
             "title": "A Fixture Paper",
             "authors": ["Alpha Author"],
+            "author_names": [{"family": "Author", "given": "Alpha"}],
             "journal": "Journal of Fixtures",
             "year": 2024,
             "metadata_source": "crossref",
@@ -50,16 +52,24 @@ PAYLOAD_DICT = {
 
 @pytest.fixture
 def clean_spike(tmp_path):
-    """A well-formed CiteBind document: R001, cluster C001 cited twice, bibliography."""
+    """A well-formed CiteBind document: R001, cluster C001 cited twice, bibliography.
+
+    "Well-formed" now includes what it could not include before Phase 3: the
+    visible text is RENDERED FROM THE PAYLOAD rather than typed here. A fixture
+    with hand-written citation text would be a document whose visible text
+    happens to disagree with its own data, which is precisely the defect
+    VISIBLE_TEXT_MISMATCH exists to catch.
+    """
     path = tmp_path / "clean.docx"
+    rendered = render(CiteBindDocument.from_dict(copy.deepcopy(PAYLOAD_DICT)))
     document = Document()
     document.add_paragraph("As shown by prior work ")
     document.add_paragraph("and confirmed again ")
     document.add_paragraph("Ordinary prose untouched by citations.")
     paragraphs = document.paragraphs
-    insert_citation(paragraphs[0], "C001", "[1]")
-    insert_citation(paragraphs[1], "C001", "[1]")
-    insert_bibliography(document, ["A. Author. A Fixture Paper. Journal of Fixtures, 2024."])
+    insert_citation(paragraphs[0], "C001", rendered.citations["C001"])
+    insert_citation(paragraphs[1], "C001", rendered.citations["C001"])
+    insert_bibliography(document, rendered.bibliography)
     docx_path = tmp_path / "plain.docx"
     document.save(docx_path)
     payload = CiteBindDocument.from_dict(copy.deepcopy(PAYLOAD_DICT))
@@ -350,6 +360,43 @@ def fixture_bibliography_count_mismatch(clean_spike, tmp_path):
     return out
 
 
+def fixture_visible_text_mismatch(clean_spike, tmp_path):
+    """The defect that used to pass every check.
+
+    Both citation controls are changed to "[7]" -- consistent with EACH OTHER,
+    so CITATION_CONTROLS_INCONSISTENT does not fire, and structurally perfect
+    in every other respect. Before Phase 3 this document inspected clean while
+    showing a citation number its payload never renders.
+    """
+    out = tmp_path / "text_mismatch.docx"
+
+    def rewrite_text(tree):
+        for sdt in tree.iter(q("sdt")):
+            tag = sdt.find(f"{q('sdtPr')}/{q('tag')}")
+            if tag is not None and tag.get(q("val")) == "citebind:citation:C001":
+                t = sdt.find(f"{q('sdtContent')}/{q('r')}/{q('t')}")
+                t.text = "[7]"
+
+    transform_document(clean_spike, rewrite_text, out)
+    return out
+
+
+def fixture_rendering_unavailable(clean_spike, tmp_path):
+    """A payload the renderer refuses: structured author names removed, so no
+    style can render an author label and the visible-text check cannot run.
+
+    The note exists so that "not checked" never reads as "checked and clean".
+    """
+    out = tmp_path / "unrenderable.docx"
+
+    def drop_structured_names(tree):
+        for reference in tree.iter("{urn:citebind:citebind:1}author_names"):
+            reference.getparent().remove(reference)
+
+    transform_payload(clean_spike, drop_structured_names, out)
+    return out
+
+
 FIXTURE_FOR_KIND = {
     FindingKind.PAYLOAD_PART_MISSING: damage_payload_removed,
     FindingKind.PAYLOAD_INVALID: fixture_payload_invalid,
@@ -364,6 +411,8 @@ FIXTURE_FOR_KIND = {
     FindingKind.CITATION_CONTROLS_INCONSISTENT: damage_visible_text_edited,
     FindingKind.BIBLIOGRAPHY_CONTROL_MISSING: damage_controls_stripped,
     FindingKind.BIBLIOGRAPHY_COUNT_MISMATCH: fixture_bibliography_count_mismatch,
+    FindingKind.VISIBLE_TEXT_MISMATCH: fixture_visible_text_mismatch,
+    FindingKind.RENDERING_UNAVAILABLE: fixture_rendering_unavailable,
 }
 
 

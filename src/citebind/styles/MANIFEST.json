@@ -1,0 +1,32 @@
+{
+  "note": "Vendored CSL assets, committed RAW and UNMODIFIED (T-14). A hand-edited style file is a fabricated citation format. Each entry pins the upstream commit, not a branch, so the exact bytes are recoverable.",
+  "assets": [
+    {
+      "file": "ieee.csl",
+      "url": "https://raw.githubusercontent.com/citation-style-language/styles/b93390e4352af47afc19144321a194f7ab7902bf/ieee.csl",
+      "repo": "citation-style-language/styles",
+      "commit": "b93390e4352af47afc19144321a194f7ab7902bf",
+      "sha256": "b4c7619fc16c45a31e4cc3271eab94ffe83192d3b4c7fc729470a3b459448de3",
+      "bytes": 17587,
+      "retrieved_at": "2026-09-07T22:52:57+00:00"
+    },
+    {
+      "file": "apa.csl",
+      "url": "https://raw.githubusercontent.com/citation-style-language/styles/b93390e4352af47afc19144321a194f7ab7902bf/apa.csl",
+      "repo": "citation-style-language/styles",
+      "commit": "b93390e4352af47afc19144321a194f7ab7902bf",
+      "sha256": "1ece4fb3c295e66d04b4394e295aa58a87741ceeef1658192437eb9953c2f13e",
+      "bytes": 85658,
+      "retrieved_at": "2026-09-07T22:52:57+00:00"
+    },
+    {
+      "file": "locales-en-US.xml",
+      "url": "https://raw.githubusercontent.com/citation-style-language/locales/9ded661fc7bb995a5453a2025ca826ff404a4fbd/locales-en-US.xml",
+      "repo": "citation-style-language/locales",
+      "commit": "9ded661fc7bb995a5453a2025ca826ff404a4fbd",
+      "sha256": "ac864c7c21166b4390d82c31792cdc509400727fa0060b43d8aa17e07f9cb079",
+      "bytes": 32649,
+      "retrieved_at": "2026-09-07T22:52:57+00:00"
+    }
+  ]
+}
