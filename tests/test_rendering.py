@@ -27,6 +27,7 @@ from citebind.model import AuthorName, CiteBindDocument, CitationCluster, Refere
 from citebind.pubmed import resolve_pmid
 from citebind.rendering import (
     CODE_AUTHOR_NAMES_UNSTRUCTURED,
+    CODE_REFERENCE_ID_CASE_COLLISION,
     CODE_LOCATOR_LABEL_UNKNOWN,
     CODE_STYLE_UNKNOWN,
     CODE_YEAR_SUFFIX_UNSUPPORTED,
@@ -233,12 +234,12 @@ def test_same_author_same_year_is_refused_in_author_year_style():
     # bypassed, citeproc-py really does render the two identically.
     from citebind import rendering
 
-    original = rendering.check_capability
-    rendering.check_capability = lambda _doc: None
+    original = rendering._check_ambiguity
+    rendering._check_ambiguity = lambda _items, _style: None
     try:
         out = rendering.render(doc)
     finally:
-        rendering.check_capability = original
+        rendering._check_ambiguity = original
     assert out.citations["C001"] == out.citations["C002"] == "(Belletti, 2010)"
 
 
@@ -303,3 +304,63 @@ def test_recorded_author_year_output():
     assert out.bibliography == [
         'Belletti, D. A. (2010). Perspectives on electronic medical records adoption: electronic medical records (EMR) in outcomes research. Patient Related Outcome Measures, 29. https://doi.org/10.2147/prom.s8896'
     ]
+
+
+def test_distinguishable_works_sharing_first_author_and_year_are_not_refused():
+    """REGRESSION. The year-suffix check used to compare first author and year,
+    which refused documents that render perfectly well: "(Belletti, 2010)" and
+    "(Belletti & Smith, 2010)" share a first author and a year and are still
+    distinguishable. Asking the metadata is not the same as asking the
+    renderer, and only the renderer knows whether the OUTPUT collides.
+    """
+    solo = Reference(
+        id="R001", title="Solo paper", authors=["Daniel A Belletti"],
+        author_names=[AuthorName(family="Belletti", given="Daniel A")],
+        journal="J", year=2010, metadata_source="crossref",
+        retrieved_at="2026-09-07T00:00:00Z", doi="10.1000/solo",
+    )
+    joint = Reference(
+        id="R002", title="Joint paper", authors=["Daniel A Belletti", "B Smith"],
+        author_names=[
+            AuthorName(family="Belletti", given="Daniel A"),
+            AuthorName(family="Smith", given="B"),
+        ],
+        journal="J", year=2010, metadata_source="crossref",
+        retrieved_at="2026-09-07T00:00:00Z", doi="10.1000/joint",
+    )
+    out = render(document(solo, joint, style="author-year"))
+    assert out.citations["C001"] != out.citations["C002"]
+
+
+def test_reference_ids_differing_only_in_case_are_refused():
+    """citeproc-py lowercases citation keys, so 'R001' and 'r001' are ONE key
+    to it while the schema sees two distinct references -- DUPLICATE_REFERENCE_ID
+    cannot fire on different strings.
+
+    DELIBERATE LOSS: refused rather than rendered. The evidence below is why:
+    with the check bypassed, both clusters cite '[1]' and the bibliography
+    carries a single entry for two cited works, which is a wrong citation that
+    looks entirely normal.
+    """
+    first = belletti()
+    second = Reference(
+        id="r001", title="A different paper", authors=["Ann Author"],
+        author_names=[AuthorName(family="Author", given="Ann")],
+        journal="J", year=2011, metadata_source="crossref",
+        retrieved_at="2026-09-07T00:00:00Z", doi="10.1000/other",
+    )
+    doc = document(first, second, style="numeric")
+    with pytest.raises(RenderingRefusal) as caught:
+        render(doc)
+    assert caught.value.code == CODE_REFERENCE_ID_CASE_COLLISION
+
+    from citebind import rendering
+
+    original = rendering.check_capability
+    rendering.check_capability = lambda _doc: None
+    try:
+        out = rendering.render(doc)
+    finally:
+        rendering.check_capability = original
+    assert out.citations["C001"] == out.citations["C002"] == "[1]"
+    assert len(out.bibliography) == 1, "two cited works, one bibliography entry"

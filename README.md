@@ -74,6 +74,7 @@ document
     R001
       DOI and/or PMID
       title, authors, journal, year
+      author_names (family/given as the SOURCE gave it) when available
       volume/issue/pages when available
       metadata_source
       retrieved_at

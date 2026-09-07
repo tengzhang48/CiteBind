@@ -19,8 +19,6 @@ reaches the reviewer.
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
-
 from citeproc import Citation, CitationItem, CitationStylesBibliography
 from citeproc import CitationStylesStyle, formatter
 from citeproc.source.json import CiteProcJSON
@@ -58,6 +56,7 @@ LOCALE = "en-US"
 CODE_STYLE_UNKNOWN = "style_unknown"
 CODE_AUTHOR_NAMES_UNSTRUCTURED = "author_names_unstructured"
 CODE_YEAR_SUFFIX_UNSUPPORTED = "year_suffix_unsupported"
+CODE_REFERENCE_ID_CASE_COLLISION = "reference_id_case_collision"
 CODE_LOCATOR_LABEL_UNKNOWN = "locator_label_unknown"
 CODE_ITEM_UNRESOLVED = "item_unresolved"
 
@@ -102,14 +101,6 @@ def to_csl_json(reference: Reference) -> dict:
     return item
 
 
-def _first_label(reference: Reference) -> Optional[str]:
-    """The name a style would put in an author-year citation, or None."""
-    if not reference.author_names:
-        return None
-    first = reference.author_names[0]
-    return first.family or first.literal
-
-
 def check_capability(document: CiteBindDocument) -> None:
     """T-18: refuse, by name, every case our two styles cannot render right.
 
@@ -144,32 +135,23 @@ def check_capability(document: CiteBindDocument) -> None:
                 "the family/given split from the display string",
             )
 
-    # 2. Year-suffix disambiguation. citeproc-py does not implement it: two
-    #    2010 papers by Belletti both render as "(Belletti, 2010)", which a
-    #    reader cannot tell apart. Reproduced against citeproc-py 0.11.1 and
-    #    pinned in test_rendering.py. Numeric styles label by position, so
-    #    the collision cannot arise there.
-    if style_key == "author-year":
-        seen: dict[tuple[str, int], str] = {}
-        for reference_id in sorted(cited_ids):
-            reference = by_id.get(reference_id)
-            if reference is None:
-                continue
-            label = _first_label(reference)
-            if label is None:
-                continue
-            key = (label, reference.year)
-            if key in seen:
-                raise RenderingRefusal(
-                    CODE_YEAR_SUFFIX_UNSUPPORTED,
-                    f"references '{seen[key]}' and '{reference_id}' share first "
-                    f"author '{label}' and year {reference.year}; the style "
-                    "renders them as 2010a/2010b and citeproc-py does not "
-                    "implement year-suffix disambiguation, so both would render "
-                    "identically and a reader could not tell which paper is "
-                    "cited",
-                )
-            seen[key] = reference_id
+    # 2. citeproc-py lowercases every citation key, so reference ids that
+    #    differ only in case are ONE key to it. The schema allows both --
+    #    they are different strings, so DUPLICATE_REFERENCE_ID does not fire --
+    #    and the result is silently wrong: both cite as "[1]" and the
+    #    bibliography carries one entry for two cited works.
+    lowered: dict[str, str] = {}
+    for reference_id in sorted(cited_ids):
+        key = reference_id.lower()
+        if key in lowered:
+            raise RenderingRefusal(
+                CODE_REFERENCE_ID_CASE_COLLISION,
+                f"references '{lowered[key]}' and '{reference_id}' differ only "
+                "in case; citeproc-py treats citation keys case-insensitively, "
+                "so the two would share one citation number and one "
+                "bibliography entry",
+            )
+        lowered[key] = reference_id
 
     # 3. A locator with no label. The citebind/1 contract stores locator as a
     #    bare string, so "12" could be a page, a chapter, a figure, or an
@@ -200,6 +182,53 @@ def _style_path(style_key: str) -> Path:
     return STYLES_DIR / STYLES[style_key]
 
 
+def _bibliography_for(items: list[dict], style_key: str) -> CitationStylesBibliography:
+    style = CitationStylesStyle(
+        str(_style_path(style_key)), locale=LOCALE, validate=False
+    )
+    return CitationStylesBibliography(style, CiteProcJSON(items), formatter.plain)
+
+
+def _check_ambiguity(items: list[dict], style_key: str) -> None:
+    """Refuse when two DIFFERENT works would render as the SAME citation.
+
+    citeproc-py does not implement year-suffix disambiguation, so an
+    author-year style renders two 2010 Belletti papers as "(Belletti, 2010)"
+    twice and a reader cannot tell which is cited.
+
+    This asks the renderer rather than guessing from the metadata. An earlier
+    version compared first author and year, which refused documents that
+    render perfectly well: "(Belletti, 2010)" and "(Belletti & Smith, 2010)"
+    share a first author and a year and are still distinguishable. The
+    property that matters is whether the OUTPUT collides, so that is what is
+    measured.
+
+    Numeric styles label by position, so distinct works always render
+    distinctly and this cannot fire; the probe is skipped rather than run to
+    a foregone conclusion.
+    """
+    if style_key == "numeric":
+        return
+    probe = _bibliography_for(items, style_key)
+    citations = {}
+    for item in items:
+        citation = Citation([CitationItem(item["id"])])
+        probe.register(citation)
+        citations[item["id"]] = citation
+    rendered: dict[str, str] = {}
+    for reference_id, citation in citations.items():
+        text = str(probe.cite(citation, lambda _key: None))
+        if text in rendered:
+            raise RenderingRefusal(
+                CODE_YEAR_SUFFIX_UNSUPPORTED,
+                f"references '{rendered[text]}' and '{reference_id}' both render "
+                f"as {text!r}; a real style disambiguates these (2010a/2010b) "
+                "and citeproc-py does not implement year-suffix "
+                "disambiguation, so a reader could not tell which work is cited",
+            )
+        rendered[text] = reference_id
+
+
 def render(document: CiteBindDocument) -> Rendering:
     """T-16 and T-17: render every cluster and the bibliography.
 
@@ -216,11 +245,9 @@ def render(document: CiteBindDocument) -> Rendering:
         if reference.id in cited_ids
     ]
 
-    source = CiteProcJSON(items)
-    style = CitationStylesStyle(
-        str(_style_path(document.selected_style)), locale=LOCALE, validate=False
-    )
-    bibliography = CitationStylesBibliography(style, source, formatter.plain)
+    _check_ambiguity(items, document.selected_style)
+
+    bibliography = _bibliography_for(items, document.selected_style)
 
     unresolved: list[str] = []
     citations: dict[str, Citation] = {}

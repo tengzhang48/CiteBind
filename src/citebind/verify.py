@@ -375,6 +375,20 @@ def _rendering_findings(raw: dict, scan: _BodyScan) -> list[Finding]:
                 f"visible text was NOT checked against rendering: {refusal}",
             )
         ]
+    except Exception as error:
+        # Deliberately broad, and the one place in this module that is. inspect
+        # exists to report on documents that are already damaged, so a renderer
+        # that throws on a hostile payload must become a finding, not a
+        # traceback -- a verifier that dies on bad input has no answer for the
+        # case it was built for. The catch still carries diagnosis (review note
+        # R2): the exception type and message are in the report.
+        return [
+            _finding(
+                FindingKind.RENDERING_UNAVAILABLE,
+                "visible text was NOT checked against rendering: the renderer "
+                f"failed unexpectedly ({type(error).__name__}: {error})",
+            )
+        ]
 
     findings: list[Finding] = []
     for cluster_id, texts in sorted(scan.citation_texts.items()):

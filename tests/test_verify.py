@@ -554,3 +554,36 @@ def test_cli_gives_clean_error_not_traceback_for_non_docx(tmp_path, capsys):
     # message names the file and the problem; never a traceback
     assert err.startswith("error:") and "notes.txt" in err
     assert "Traceback" not in err
+
+
+def test_unexpected_renderer_failure_is_a_note_not_a_traceback(clean_spike, monkeypatch):
+    """inspect exists to report on documents that are ALREADY damaged, so a
+    renderer that throws on a hostile payload must become a finding. A verifier
+    that dies on bad input has no answer for the case it was built for."""
+    import citebind.verify as verify_module
+
+    def exploding_render(_document):
+        raise ValueError("renderer went bang")
+
+    monkeypatch.setattr(verify_module, "render", exploding_render)
+    report = inspect(clean_spike)
+    notes = [f for f in report.findings if f.kind == FindingKind.RENDERING_UNAVAILABLE]
+    assert notes, "an exploding renderer must still produce a report"
+    assert "ValueError" in notes[0].detail and "went bang" in notes[0].detail
+
+
+def test_payload_round_trip_preserves_structured_author_names(tmp_path):
+    """The split is only useful if it survives the document. embed/extract is
+    the path every rendered citation depends on."""
+    from citebind.part import extract
+
+    document = Document()
+    document.add_paragraph("Prose.")
+    plain = tmp_path / "plain.docx"
+    document.save(plain)
+    payload = CiteBindDocument.from_dict(copy.deepcopy(PAYLOAD_DICT))
+    out = tmp_path / "round_trip.docx"
+    embed(plain, payload, out)
+    recovered = extract(out)
+    assert recovered.references[0].author_names == payload.references[0].author_names
+    assert recovered.to_dict() == payload.to_dict()

@@ -73,13 +73,17 @@ T-14 through T-18, plus the wiring the finding in §2 demanded.
 - **T-15.** `Reference` → CSL-JSON, absence rule unchanged.
 - **T-16 / T-17.** Clusters and bibliography, cited works only, style ordering,
   deterministic — no clock, no environment locale.
-- **T-18.** Four named refusals: `author_names_unstructured`,
-  `year_suffix_unsupported`, `locator_label_unknown`, `style_unknown`.
+- **T-18.** Five named refusals: `author_names_unstructured`,
+  `year_suffix_unsupported`, `reference_id_case_collision`,
+  `locator_label_unknown`, `style_unknown`.
 
 The year-suffix refusal is backed by reproduced evidence, not by the README's
-feature list: with the check bypassed in the test, citeproc-py really does
-render two different 2010 Belletti papers as `(Belletti, 2010)` twice. The test
-exercises that bypass so the justification cannot rot into a stale comment.
+feature list: with `_check_ambiguity` bypassed in the test, citeproc-py really
+does render two different 2010 Belletti papers as `(Belletti, 2010)` twice. The
+test exercises that bypass so the justification cannot rot into a stale comment.
+
+Two of those refusals came out of re-checking the work rather than writing it,
+and §7 is about them.
 
 `locator_label_unknown` is a **contract gap I could not close**: citebind/1
 stores a locator as a bare string, so `"12"` could be a page, a chapter, or a
@@ -136,7 +140,41 @@ Also worth stating: `CitationStylesStyle(locale=...)` takes a locale *name* and
 the vendored locale file is not loaded and must not be described as if it were.
 It earns its place as an oracle instead.
 
-## 7. What is still not done — none of it by GLM
+## 7. Two bugs found by re-checking, and what they have in common
+
+Both were in the code I had already committed and the suite was already green
+for. Both are the same mistake: **a proxy standing in for the property it was
+supposed to measure.**
+
+**The year-suffix check refused documents that render perfectly.** It compared
+first author and year, which is not the property that matters. `(Belletti,
+2010)` and `(Belletti & Smith, 2010)` share a first author and a year and are
+perfectly distinguishable; the check refused them anyway. Only the renderer
+knows whether the *output* collides, so the check now renders each cited work
+and looks for two that come out identical. Asking the metadata was never the
+same question as asking the renderer.
+
+**Reference ids differing only in case silently collapsed.** citeproc-py
+lowercases citation keys, so `R001` and `r001` are one key to it while the
+schema sees two distinct references — `DUPLICATE_REFERENCE_ID` cannot fire on
+two different strings. The result was a document where both clusters cite `[1]`
+and the bibliography carries one entry for two cited works: a wrong citation
+that looks entirely normal, which is the exact failure this project exists to
+prevent. Now refused by name, with the collapsed output exercised in the test
+as the evidence.
+
+Also hardened: `inspect` now turns an unexpected renderer exception into a
+`rendering_unavailable` note instead of a traceback. It is the one deliberately
+broad catch in that module, and it carries the exception type and message. A
+verifier that dies on bad input has no answer for the case it was built for.
+
+Neither bug was reachable by the tests I wrote alongside the code, because I
+wrote tests for the cases I had in mind, and both bugs were cases I did not
+have in mind. The probes that found them ran the code against inputs chosen to
+be awkward rather than representative — worth doing to T-19 before it is
+reviewed rather than after.
+
+## 8. What is still not done — none of it by GLM
 
 1. **Phase 1's exit condition.** Unmet. Five minutes in Word, by a human.
 2. **The add-in.** Does not exist. No Office.js, no manifest. Nothing runs in
@@ -144,7 +182,7 @@ It earns its place as an oracle instead.
 3. **N3, the re-record.** Still blocked on a real contact address. The
    placeholder mailto must be replaced *before* re-recording, not after.
 
-## 8. Next
+## 9. Next
 
 Nothing until the Word run. Phase 3 was built because it survives any outcome
 of that run; the contract questions it raised — `author_names` shape, the
