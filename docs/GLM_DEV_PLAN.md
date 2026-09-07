@@ -37,8 +37,16 @@ product plan. This document is the *execution* plan for the first two phases.
 ### The Word problem, and how it is actually solved
 
 Phase 1 asks whether tagged citations survive a real Word save/reopen. You cannot run that test
-here. This is not a blocker, because ArtifactCert already solved the same problem, and the answer
-is: **never open Word at all.**
+here, and you never need Word to build or test what you build: **editing a Word document must
+not require Office to be installed.** Everything CiteBind does to a DOCX — generate it, embed the
+payload, insert the controls, render the visible text, inspect it, diff it — is OPC manipulation
+that runs headless on Linux. That is a product property, not a workaround for this machine.
+
+What does not follow is that Word is out of the loop. ArtifactCert can be a DOCX tool that never
+runs Word; CiteBind is a Word **add-in**, so Word is its target runtime, and what Word itself does
+on save, cross-document paste, and Track Changes is a fact about the product that no Linux test
+can supply. **Validate Word-specific persistence and editing behaviour in real Microsoft Word
+before Phase 1 is accepted.**
 
 ArtifactCert manipulates DOCX files purely as OPC zip packages via `python-docx` + `lxml`, and
 obtains real Word-produced files by receiving them from collaborators as opaque inputs. You do the
