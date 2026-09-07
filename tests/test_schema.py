@@ -4,8 +4,6 @@ Acceptance: three well-formed documents validate; five distinct malformed
 documents are each rejected with a *named* error code, not a generic one.
 """
 
-import copy
-
 import pytest
 
 from citebind.model import CiteBindDocument, CitationCluster, Reference
