@@ -17,6 +17,7 @@ from citebind.transport import (
     CODE_CONNECTION_ERROR,
     CODE_EMPTY_RESULT,
     CODE_HTTP_ERROR,
+    CODE_RECORDING_FILE_MISSING,
     CODE_MALFORMED_JSON,
     CODE_TIMEOUT,
     CODE_URL_NOT_RECORDED,
@@ -147,8 +148,9 @@ def test_all_transport_and_response_codes_are_distinct():
         CODE_HTTP_ERROR,
         CODE_MALFORMED_JSON,
         CODE_EMPTY_RESULT,
+        CODE_RECORDING_FILE_MISSING,
     }
-    assert len(codes) == 6
+    assert len(codes) == 7
 
 
 def test_recorder_uses_the_production_transport_not_a_second_one():
@@ -175,3 +177,18 @@ def test_recorder_uses_the_production_transport_not_a_second_one():
     ).read_text()
     assert len(re.findall(r"(?m)^USER_AGENT = ", transport_source)) == 1
     assert len(re.findall(r'headers=\{"User-Agent"', transport_source)) == 1
+
+
+def test_manifest_naming_a_file_that_is_not_there_is_named(tmp_path):
+    """REGRESSION. A manifest entry pointing at a missing recording raised a
+    bare FileNotFoundError from inside ReplayTransport, while every other
+    failure in this module carries a code. The manifest and the recordings are
+    one artifact; the error should say which half is missing."""
+    (tmp_path / "MANIFEST.json").write_text(
+        json.dumps({"recordings": [{"url": "https://example.test/a", "file": "gone.json"}]})
+    )
+    transport = ReplayTransport(tmp_path / "MANIFEST.json")
+    with pytest.raises(TransportError) as caught:
+        transport.fetch("https://example.test/a")
+    assert caught.value.code == CODE_RECORDING_FILE_MISSING
+    assert "gone.json" in str(caught.value)

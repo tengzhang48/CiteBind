@@ -125,7 +125,19 @@ def normalize_pmid(raw: str) -> str:
             CODE_NOT_A_PMID,
             f"'{cleaned}' is not a PMID: PMIDs are bare digits",
         )
-    return str(int(cleaned))
+    canonical = str(int(cleaned))
+    if canonical == "0":
+        # Stripping leading zeros turned something like "0" or "0000" into a
+        # PMID that cannot exist: PubMed assigns from 1. Refused by name here
+        # rather than sent to NCBI, which would answer with an empty result
+        # that reads like "this record was withdrawn" instead of "you asked
+        # for a number that is not an identifier".
+        raise IdentifierError(
+            CODE_NOT_A_PMID,
+            f"'{raw.strip()}' normalizes to PMID 0, which does not exist: "
+            "PubMed assigns PMIDs from 1",
+        )
+    return canonical
 
 
 def parse_identifier(raw: str) -> "Identifier":

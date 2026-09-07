@@ -26,6 +26,7 @@ from typing import Protocol
 CODE_TIMEOUT = "timeout"
 CODE_CONNECTION_ERROR = "connection_error"
 CODE_URL_NOT_RECORDED = "url_not_recorded"
+CODE_RECORDING_FILE_MISSING = "recording_file_missing"
 CODE_HTTP_ERROR = "http_error"
 CODE_MALFORMED_JSON = "malformed_json"
 CODE_EMPTY_RESULT = "empty_result"
@@ -126,7 +127,15 @@ class HttpTransport:
 
 class ReplayTransport:
     """Replay recorded raw responses from disk, via a manifest mapping URLs
-    to files. The only transport the test suite uses."""
+    to files. The only transport the test suite uses.
+
+    TRUST BOUNDARY: a manifest is authored fixture content committed to this
+    repository, not input from a document or a user, so ``file`` is joined to
+    the manifest's directory without containment checks and an absolute path
+    is honoured (test_crossref points one at an archived response elsewhere in
+    the tree). If manifests ever arrive from outside -- a downloaded recording
+    bundle, a fixture set shared between projects -- that assumption ends and
+    this join needs to refuse paths that escape the manifest's directory."""
 
     def __init__(self, manifest_path: Path):
         self.manifest_path = Path(manifest_path)
@@ -149,7 +158,19 @@ class ReplayTransport:
                 f"'{url}' has no recording in {self.manifest_path}; "
                 "a test asked for a URL nobody recorded",
             )
-        body = (self.manifest_path.parent / recording["file"]).read_bytes()
+        path = self.manifest_path.parent / recording["file"]
+        try:
+            body = path.read_bytes()
+        except OSError as error:
+            # A manifest entry naming a file that is not there: named, like
+            # every other failure in this module, instead of surfacing a bare
+            # FileNotFoundError from three frames down. The manifest and the
+            # recordings are one artifact, and this says which half is missing.
+            raise TransportError(
+                CODE_RECORDING_FILE_MISSING,
+                f"'{url}' is listed in {self.manifest_path} as "
+                f"{recording['file']!r}, but that file could not be read: {error}",
+            ) from error
         return TransportResponse(status=recording.get("status", 200), body=body)
 
 

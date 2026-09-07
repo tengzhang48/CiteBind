@@ -196,3 +196,15 @@ def test_the_named_refusal_codes_are_distinct():
         CODE_UNRECOGNIZED_IDENTIFIER,
     }
     assert len(codes) == 5
+
+
+@pytest.mark.parametrize("raw", ["0", "00", "0000000", "PMID:0", " 0 "])
+def test_pmid_zero_is_refused_by_name(raw):
+    """REGRESSION. Leading-zero stripping turned "0" into the canonical PMID
+    "0", which PubMed never assigns — it numbers from 1. The request would
+    have gone out and come back empty, and an empty PubMed result reads like
+    "this record was withdrawn" rather than "you asked for a number that is
+    not an identifier"."""
+    with pytest.raises(IdentifierError) as caught:
+        normalize_pmid(raw)
+    assert caught.value.code == CODE_NOT_A_PMID
