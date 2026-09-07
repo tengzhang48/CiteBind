@@ -587,3 +587,21 @@ def test_payload_round_trip_preserves_structured_author_names(tmp_path):
     recovered = extract(out)
     assert recovered.references[0].author_names == payload.references[0].author_names
     assert recovered.to_dict() == payload.to_dict()
+
+
+def test_payload_missing_authors_is_reported_not_a_traceback(clean_spike, tmp_path):
+    """REGRESSION. Deleting the <authors> element used to take inspect down
+    with a bare KeyError from the schema, which is the worst possible failure
+    for a tool whose entire purpose is reporting on documents that are already
+    damaged. The damage must come back as a named finding."""
+    out = tmp_path / "no_authors.docx"
+
+    def drop_authors(tree):
+        for node in list(tree.iter("{urn:citebind:citebind:1}authors")):
+            node.getparent().remove(node)
+
+    transform_payload(clean_spike, drop_authors, out)
+    report = inspect(out)
+    kinds = [f.kind for f in report.findings]
+    assert FindingKind.PAYLOAD_INVALID in kinds, kinds
+    assert "authors" in " ".join(f.detail for f in report.findings)

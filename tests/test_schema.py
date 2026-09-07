@@ -4,11 +4,14 @@ Acceptance: three well-formed documents validate; five distinct malformed
 documents are each rejected with a *named* error code, not a generic one.
 """
 
+import copy
+
 import pytest
 
 from citebind.model import CiteBindDocument, CitationCluster, Reference
 from citebind.schema import (
     CLUSTER_ID_DUPLICATE,
+    FIELD_INVALID,
     CLUSTER_REFERENCE_UNKNOWN,
     KEY_UNKNOWN_TOP_LEVEL,
     REFERENCE_ID_DUPLICATE,
@@ -222,3 +225,22 @@ def test_the_five_named_rejection_codes_are_all_distinct():
         KEY_UNKNOWN_TOP_LEVEL,
     }
     assert len(codes) == 5
+
+
+@pytest.mark.parametrize("missing", ["authors", "year"])
+def test_missing_non_string_required_key_is_named_not_a_crash(missing):
+    """REGRESSION. 'authors' and 'year' are held out of the required-string
+    loop because they need their own type checks -- and those checks indexed
+    the key, so a payload missing either raised a bare KeyError.
+
+    That broke this module's stated contract (every rejection carries a stable
+    code) and crashed `inspect` on precisely the damaged documents it exists to
+    report on: deleting the <authors> element from a payload part took the
+    verifier down with a traceback instead of a finding.
+    """
+    payload = wellformed_minimal_doi()
+    payload["references"][0].pop(missing)
+    with pytest.raises(SchemaError) as caught:
+        validate_document(payload)
+    assert caught.value.code == FIELD_INVALID
+    assert missing in str(caught.value)

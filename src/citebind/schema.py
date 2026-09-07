@@ -122,6 +122,19 @@ def _validate_reference(reference: dict, seen_ids: set[str]) -> None:
     for key in REFERENCE_REQUIRED_KEYS - {"id", "authors", "year"}:
         _require_nonempty_str(reference, key, FIELD_INVALID, f"reference '{ref_id}'")
 
+    # 'authors' and 'year' are held out of the loop above because they are not
+    # strings and need their own type checks -- but those checks then INDEXED
+    # the key, so a payload missing either one raised a bare KeyError instead
+    # of a named SchemaError. That broke this module's contract ("fail-closed
+    # and names every rejection with a stable code") and crashed inspect on
+    # exactly the damaged documents it exists to report on. Presence is
+    # checked here, once, before either bespoke check runs.
+    for key in ("authors", "year"):
+        if key not in reference:
+            raise SchemaError(
+                FIELD_INVALID, f"reference '{ref_id}': '{key}' is missing"
+            )
+
     if not isinstance(reference["authors"], list) or not all(
         isinstance(a, str) and a for a in reference["authors"]
     ):
