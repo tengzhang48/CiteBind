@@ -234,3 +234,41 @@ def test_inspect_reports_ambiguous_payload_as_finding(base_docx, tmp_path):
     report = inspect(dual)
     assert FindingKind.PAYLOAD_INVALID in [f.kind for f in report.findings]
     assert any("multiple_payload_parts" in f.detail for f in report.findings)
+
+
+def test_datastore_item_id_is_a_valid_ooxml_guid(tmp_path):
+    """REGRESSION, and SOURCED against the spec rather than against ourselves.
+
+    ECMA-376 types ``ds:itemID`` as ``ST_Guid``, whose pattern requires
+    surrounding braces. We wrote a bare GUID, so every document CiteBind
+    produced carried an attribute value Word is entitled to reject -- and the
+    part python-docx's own template writes, right next to ours, has the braces.
+
+    The cost of getting this wrong was not a crash: it was a Word repair prompt
+    on the Phase 1 spike fixture, which would have been read as evidence that
+    content controls do not survive Word.
+    """
+    from citebind.part import DATASTORE_ITEM_ID
+
+    st_guid = re.compile(
+        r"^\{[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}\}$"
+    )
+    assert st_guid.match(DATASTORE_ITEM_ID)
+
+    # and it must reach the document, not just the constant
+    document = Document()
+    document.add_paragraph("Body.")
+    plain = tmp_path / "plain.docx"
+    document.save(plain)
+    out = tmp_path / "out.docx"
+    embed(plain, CiteBindDocument.from_dict(wellformed_minimal_doi()), out)
+    with zipfile.ZipFile(out) as package:
+        props = [n for n in package.namelist() if "itemProps" in n]
+        found = []
+        for name in props:
+            match = re.search(r'itemID="([^"]+)"', package.read(name).decode())
+            if match:
+                found.append(match.group(1))
+    assert found, "no itemProps part carried an itemID"
+    for value in found:
+        assert st_guid.match(value), f"{value} is not a valid ST_Guid"

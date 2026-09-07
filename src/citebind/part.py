@@ -33,7 +33,18 @@ CITEBIND_NS = "urn:citebind:citebind:1"
 CB = f"{{{CITEBIND_NS}}}"
 ROOT_TAG = f"{CB}document"
 
-DATASTORE_ITEM_ID = "26366BC3-6DD7-4AA2-9975-5716BAA0AD41"
+# ECMA-376 types ds:itemID as ST_Guid, whose pattern REQUIRES the braces:
+# \{[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}\}. Written
+# without them for the project's first weeks, which put an attribute Word can
+# reject into every document CiteBind produced -- including the Phase 1 spike
+# fixture, where a repair prompt would have read as "content controls do not
+# survive Word" and sent the spike to the wrong conclusion.
+#
+# Fixed rather than random, deliberately: identical input must produce
+# identical bytes, which the plan's byte-identical repackaging probe depends
+# on. The GUID does not identify CiteBind's part -- find_citebind_part matches
+# the payload root tag -- so a fixed value costs nothing.
+DATASTORE_ITEM_ID = "{26366BC3-6DD7-4AA2-9975-5716BAA0AD41}"
 
 CT_NS = "http://schemas.openxmlformats.org/package/2006/content-types"
 RELS_NS = "http://schemas.openxmlformats.org/package/2006/relationships"
