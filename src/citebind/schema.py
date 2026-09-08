@@ -101,6 +101,20 @@ def validate_document(document: dict) -> None:
         _validate_cluster(cluster, seen_cluster_ids, seen_reference_ids)
 
 
+def validate_reference(reference: dict) -> None:
+    """Validate ONE reference, independent of any document.
+
+    ``validate_document`` was the only entry point that validated, and
+    ``Reference.from_dict`` did not call it — while both resolvers build
+    references through ``Reference.from_dict``. So a resolver's own shape
+    checks were the only thing standing between a malformed API response and a
+    stored reference, and they check containers, not contents: an author
+    object ``{"name": 7}`` is a mapping, so it passed, and the integer reached
+    the model and would have been str()-ed into the payload XML.
+    """
+    _validate_reference(reference, set())
+
+
 def _validate_reference(reference: dict, seen_ids: set[str]) -> None:
     if not isinstance(reference, dict):
         raise SchemaError(FIELD_INVALID, "each reference must be a mapping")

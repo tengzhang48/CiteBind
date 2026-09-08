@@ -10,7 +10,7 @@ never installed CiteBind — and every citation-to-reference relationship is
 still recoverable, with no external library, account, or sync service.
 
 > **Status: Phases 2 and 3 complete, Phase 1 unfinished.** References resolve,
-> render, and verify from Python (266 tests, on the `phase1-spike` branch). No
+> render, and verify from Python (315 tests, on the `phase1-spike` branch). No
 > Word add-in code has been written, and Phase 1's exit condition still needs a
 > human running the spike document in Word. See
 > [§ Current status](#current-status).
@@ -147,7 +147,7 @@ selection; the `citebind/1` custom XML part; tagged content controls;
 deterministic rendering of citations and the bibliography in one numeric and
 one author–year style, with named refusals where it cannot be correct; the
 Phase 1 spike kit (`make-spike` and `check-spike`); and an `inspect` / `diff`
-CLI. 266 tests, all passing.
+CLI. 315 tests, all passing.
 
 **Not implemented: the add-in itself.** There is no Office.js project. The
 Python above is a resolver library and a document-inspection kit — it can write
@@ -159,7 +159,7 @@ depends on model-generated identity.
 **Phase 3 is implemented.** Citations and the bibliography render
 deterministically from the embedded payload through citeproc-py 0.11.1
 (exactly pinned), with `ieee.csl` and `apa.csl` vendored raw at pinned
-upstream commits. The renderer refuses, by name, four cases it cannot get
+upstream commits. The renderer refuses, by name, five cases it cannot get
 right rather than emitting a plausible wrong citation — including two works by
 one author in one year, which real styles render 2009a/2009b and citeproc-py
 does not.

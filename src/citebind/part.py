@@ -20,6 +20,7 @@ number.)
 """
 
 import re
+import uuid
 import zipfile
 from pathlib import Path
 from typing import Optional, Union
@@ -44,7 +45,10 @@ ROOT_TAG = f"{CB}document"
 # identical bytes, which the plan's byte-identical repackaging probe depends
 # on. The GUID does not identify CiteBind's part -- find_citebind_part matches
 # the payload root tag -- so a fixed value costs nothing.
-DATASTORE_ITEM_ID = "{26366BC3-6DD7-4AA2-9975-5716BAA0AD41}"
+# Namespace for deriving per-part itemIDs (see _datastore_item_id). The
+# value below is the GUID CiteBind used for every part before uniqueness
+# was enforced; it is kept as the namespace so derivation stays stable.
+DATASTORE_NAMESPACE = uuid.UUID("26366BC3-6DD7-4AA2-9975-5716BAA0AD41")
 
 CT_NS = "http://schemas.openxmlformats.org/package/2006/content-types"
 RELS_NS = "http://schemas.openxmlformats.org/package/2006/relationships"
@@ -60,6 +64,13 @@ CUSTOM_XML_DATASTORE_NS = (
 
 CONTENT_TYPES_PART = "[Content_Types].xml"
 PACKAGE_RELS_PART = "_rels/.rels"
+# A custom XML part is related FROM the main document part, not from the
+# package root. Word's own template proves it: its customXml/item1.xml is
+# reached by a relationship in word/_rels/document.xml.rels targeting
+# "../customXml/item1.xml". CiteBind wrote its relationship into the
+# package rels instead, so our reader (which scans zip members) found the
+# payload while Word's relationship graph did not lead to it.
+DOCUMENT_RELS_PART = "word/_rels/document.xml.rels"
 
 _ITEM_RE = re.compile(r"^customXml/item(\d+)\.xml$")
 
@@ -226,7 +237,13 @@ def _reference_to_dict(node) -> dict:
             result[key] = child.text
     year = node.find(f"{CB}year")
     if year is not None and year.text is not None:
-        result["year"] = int(year.text)
+        # payload_to_dict is the DAMAGED-document path: it must not validate,
+        # and it must not raise either. int("abc") did, taking inspect down
+        # with a ValueError three frames from the caller. A year that is not a
+        # number is carried through as the text it is, so the schema rejects it
+        # by name and the verifier reports a finding instead of a traceback.
+        text = year.text.strip()
+        result["year"] = int(text) if text.lstrip("-").isdigit() else year.text
     authors = node.find(f"{CB}authors")
     if authors is not None:
         result["authors"] = [
@@ -264,12 +281,49 @@ def _cluster_to_dict(node) -> dict:
 # --- OPC package wiring ---------------------------------------------------------
 
 
-def _item_props_xml() -> bytes:
+def _datastore_item_id(n: int, taken: set[str]) -> str:
+    """A deterministic itemID that is unique within this package.
+
+    ds:itemID must be unique among a document's custom XML data parts. A single
+    fixed GUID satisfied ST_Guid but not uniqueness: embedding beside a
+    clobbered CiteBind slot produced itemProps2 and itemProps3 carrying the
+    same ID.
+
+    Derived rather than random so identical input still produces identical
+    bytes, which the byte-identical repackaging probe depends on. If the
+    derived value is somehow already taken, the salt advances until it is not.
+    """
+    salt = 0
+    while True:
+        suffix = f"slot{n}" if salt == 0 else f"slot{n}#{salt}"
+        candidate = "{" + str(uuid.uuid5(DATASTORE_NAMESPACE, suffix)).upper() + "}"
+        if candidate not in taken:
+            return candidate
+        salt += 1
+
+
+def _existing_item_ids(source: zipfile.ZipFile) -> set[str]:
+    """Every ds:itemID already in the package, so a new one can avoid them."""
+    found: set[str] = set()
+    for name in source.namelist():
+        if not re.match(r"^customXml/itemProps\d+\.xml$", name):
+            continue
+        try:
+            root = parse_xml_hardened(source.read(name))
+        except (UnsafeXML, etree.XMLSyntaxError):
+            continue
+        value = root.get(f"{{{CUSTOM_XML_DATASTORE_NS}}}itemID")
+        if value:
+            found.add(value)
+    return found
+
+
+def _item_props_xml(item_id: str) -> bytes:
     ds = f"{{{CUSTOM_XML_DATASTORE_NS}}}"
     root = etree.Element(
         f"{ds}datastoreItem", nsmap={"ds": CUSTOM_XML_DATASTORE_NS}
     )
-    root.set(f"{ds}itemID", DATASTORE_ITEM_ID)
+    root.set(f"{ds}itemID", item_id)
     return etree.tostring(
         etree.ElementTree(root), xml_declaration=True, encoding="UTF-8"
     )
@@ -331,10 +385,16 @@ def _updated_content_types(data: bytes, n: int) -> bytes:
     )
 
 
-def _updated_package_rels(data: bytes, n: int) -> bytes:
+def _updated_document_rels(data: bytes, n: int) -> bytes:
+    """Relate customXml/item{n}.xml FROM the main document part.
+
+    The target is relative to word/_rels/, hence the "../". This is the shape
+    Word writes and the shape the Open XML SDK produces via
+    MainDocumentPart.AddCustomXmlPart.
+    """
     root = parse_xml_hardened(data)
     rels = f"{{{RELS_NS}}}"
-    target = f"customXml/item{n}.xml"
+    target = f"../customXml/item{n}.xml"
     existing_targets = {
         node.get("Target")
         for node in root.findall(f"{rels}Relationship")
@@ -354,6 +414,32 @@ def _updated_package_rels(data: bytes, n: int) -> bytes:
         Type=CUSTOM_XML_REL_TYPE,
         Target=target,
     )
+    return etree.tostring(
+        etree.ElementTree(root), xml_declaration=True, encoding="UTF-8"
+    )
+
+
+def _without_stale_package_rel(data: bytes, n: int) -> bytes:
+    """Drop a package-root relationship to our own item, if one is there.
+
+    Documents produced before the relationship moved to the main document part
+    carry the wrong one. Leaving it would mean a package advertising the same
+    custom XML part twice, by two different owners. Only a relationship whose
+    target is OUR item is removed; anything else in the package rels is left
+    exactly as found.
+    """
+    root = parse_xml_hardened(data)
+    rels = f"{{{RELS_NS}}}"
+    removed = False
+    for node in list(root.findall(f"{rels}Relationship")):
+        if (
+            node.get("Type") == CUSTOM_XML_REL_TYPE
+            and node.get("Target") == f"customXml/item{n}.xml"
+        ):
+            root.remove(node)
+            removed = True
+    if not removed:
+        return data
     return etree.tostring(
         etree.ElementTree(root), xml_declaration=True, encoding="UTF-8"
     )
@@ -382,14 +468,32 @@ def embed(
                 )
         n = _allocate_slot(source)
         part_name = f"customXml/item{n}.xml"
+        # Reuse this slot's existing itemID when there is one: updating a
+        # payload must not renumber a part Word already knows.
+        props_name = f"customXml/itemProps{n}.xml"
+        taken = _existing_item_ids(source)
+        item_id = None
+        if props_name in source.namelist():
+            try:
+                current = parse_xml_hardened(source.read(props_name))
+                item_id = current.get(f"{{{CUSTOM_XML_DATASTORE_NS}}}itemID")
+            except (UnsafeXML, etree.XMLSyntaxError):
+                item_id = None
+        if item_id:
+            taken = taken - {item_id}
+        else:
+            item_id = _datastore_item_id(n, taken)
         replacements: dict[str, bytes] = {
             part_name: payload,
-            f"customXml/itemProps{n}.xml": _item_props_xml(),
+            props_name: _item_props_xml(item_id),
             f"customXml/_rels/item{n}.xml.rels": _item_rels_xml(n),
             CONTENT_TYPES_PART: _updated_content_types(
                 source.read(CONTENT_TYPES_PART), n
             ),
-            PACKAGE_RELS_PART: _updated_package_rels(
+            DOCUMENT_RELS_PART: _updated_document_rels(
+                source.read(DOCUMENT_RELS_PART), n
+            ),
+            PACKAGE_RELS_PART: _without_stale_package_rel(
                 source.read(PACKAGE_RELS_PART), n
             ),
         }

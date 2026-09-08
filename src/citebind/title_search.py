@@ -17,6 +17,7 @@ from dataclasses import dataclass
 from typing import Optional
 
 from .crossref import (
+    RecordIncompleteError,
     ResponseShapeError,
     resolve_doi,
     title_search_url,
@@ -24,9 +25,13 @@ from .crossref import (
 )
 from .identifiers import normalize_doi
 from .model import Reference
-from .pubmed import PUBMED_SUMMARY_URL, resolve_pmid, summary_to_fields
+from .pubmed import (
+    PUBMED_SUMMARY_URL,
+    RecordIncompleteError as PubMedRecordIncompleteError,
+    resolve_pmid,
+    summary_to_fields,
+)
 from .transport import (
-    ResponseError,
     Transport,
     check_status,
     decode_json,
@@ -62,11 +67,12 @@ def _crossref_candidates(title: str, transport: Transport, rows: int) -> list[Ca
     response = transport.fetch(title_search_url(title, rows))
     check_status(response, source="crossref")
     document = decode_json(response, source="crossref")
-    items = (
-        document.get("message", {}).get("items")
-        if isinstance(document, dict)
-        else None
-    )
+    message = document.get("message") if isinstance(document, dict) else None
+    if message is not None and not isinstance(message, dict):
+        raise ResponseShapeError(
+            f"Crossref search 'message' is not an object; got {type(message).__name__}"
+        )
+    items = message.get("items") if isinstance(message, dict) else None
     if items is not None and (
         not isinstance(items, list)
         or not all(isinstance(item, dict) for item in items)
@@ -83,10 +89,15 @@ def _crossref_candidates(title: str, transport: Transport, rows: int) -> list[Ca
             continue
         try:
             fields = work_to_fields(item)
-        except ResponseError:
+        except RecordIncompleteError:
             # a candidate missing required fields is not offered as one:
             # it could never become a valid reference
             continue
+        # NOTE: ResponseShapeError deliberately NOT caught. It subclasses
+        # ResponseError, so a blanket except turned "the API's shape changed"
+        # into "this one candidate was incomplete" -- the search then returned
+        # a shorter list and looked entirely normal. A shape change must reach
+        # the caller; an incomplete record must not.
         candidates.append(
             Candidate(
                 source="crossref",
@@ -108,14 +119,30 @@ def _pubmed_candidates(title: str, transport: Transport) -> list[Candidate]:
     search_response = transport.fetch(search_url)
     check_status(search_response, source="pubmed")
     search = decode_json(search_response, source="pubmed")
-    idlist = search.get("esearchresult", {}).get("idlist") if isinstance(search, dict) else None
+    esearch = search.get("esearchresult") if isinstance(search, dict) else None
+    if esearch is not None and not isinstance(esearch, dict):
+        raise ResponseShapeError(
+            f"PubMed 'esearchresult' is not an object; got {type(esearch).__name__}"
+        )
+    idlist = esearch.get("idlist") if isinstance(esearch, dict) else None
+    if idlist is not None and (
+        not isinstance(idlist, list) or not all(isinstance(i, str) for i in idlist)
+    ):
+        raise ResponseShapeError(
+            f"PubMed 'idlist' is not a list of id strings; got {type(idlist).__name__}"
+        )
     require_non_empty(idlist or [], source="pubmed", what="title search")
 
     summary_url = PUBMED_SUMMARY_URL.format(pmid=",".join(idlist))
     summary_response = transport.fetch(summary_url)
     check_status(summary_response, source="pubmed")
     summary = decode_json(summary_response, source="pubmed")
-    result = summary.get("result", {})
+    result = summary.get("result") if isinstance(summary, dict) else None
+    if result is not None and not isinstance(result, dict):
+        raise ResponseShapeError(
+            f"PubMed summary 'result' is not an object; got {type(result).__name__}"
+        )
+    result = result or {}
 
     candidates: list[Candidate] = []
     for pmid in idlist:  # rank order, exactly as PubMed returned it
@@ -124,8 +151,9 @@ def _pubmed_candidates(title: str, transport: Transport) -> list[Candidate]:
             continue
         try:
             fields = summary_to_fields(pmid, doc)
-        except ResponseError:
+        except PubMedRecordIncompleteError:
             continue
+        # ResponseShapeError propagates here too, for the same reason.
         candidates.append(
             Candidate(
                 source="pubmed",

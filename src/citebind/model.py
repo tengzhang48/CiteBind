@@ -7,7 +7,7 @@ by construction a valid citebind/1 payload.
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
-from .schema import validate_document
+from .schema import validate_document, validate_reference
 
 
 @dataclass(frozen=True)
@@ -88,6 +88,10 @@ class Reference:
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "Reference":
+        # Validate here, not only in CiteBindDocument.from_dict: this is the
+        # constructor both resolvers use, so it is the boundary a malformed
+        # API response actually crosses.
+        validate_reference(data)
         return cls(
             id=data["id"],
             doi=data.get("doi"),

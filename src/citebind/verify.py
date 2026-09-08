@@ -253,9 +253,22 @@ def inspect(docx_path: Union[str, Path]) -> Report:
         if part_name is not None:
             try:
                 raw = payload_to_dict(source.read(part_name))
-            except (UnsafeXML, PayloadError) as error:
+            except (UnsafeXML, PayloadError, ValueError) as error:
                 findings.append(_finding(FindingKind.PAYLOAD_INVALID, str(error)))
         part_exists = part_name is not None or _payload_part_exists(source)
+        if part_exists and raw is None and not findings:
+            # FAIL-OPEN, closed. find_citebind_part skips an item it cannot
+            # parse and _payload_part_exists then answers "yes, something is
+            # there", so a corrupt payload produced has_payload=True, raw=None,
+            # no finding at all -- and is_clean was True. A document whose
+            # reference data is unreadable is the opposite of clean.
+            findings.append(
+                _finding(
+                    FindingKind.PAYLOAD_INVALID,
+                    "a citebind payload part is present but could not be read; "
+                    "its XML is damaged or it is not a citebind payload",
+                )
+            )
 
     schema_version = selected_style = None
     reference_ids: list[str] = []

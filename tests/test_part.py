@@ -73,9 +73,15 @@ def test_embed_adds_custom_xml_part(base_docx, tmp_path):
     assert b'PartName="/customXml/itemProps2.xml"' in content_types
     assert b'PartName="/customXml/item2.xml"' not in content_types
     assert b'<Default Extension="xml"' in content_types
-    rels = zipfile.ZipFile(out).read("_rels/.rels")
-    assert b"relationships/customXml" in rels
-    assert f"customXml/item{n}.xml".encode() in rels
+    # The relationship belongs to the MAIN DOCUMENT part, not the package
+    # root: that is where Word puts its own (word/_rels/document.xml.rels ->
+    # "../customXml/item1.xml"), and a relationship graph Word does not follow
+    # is a payload Word cannot see, however well our own reader finds it.
+    document_rels = zipfile.ZipFile(out).read("word/_rels/document.xml.rels")
+    assert b"relationships/customXml" in document_rels
+    assert f"../customXml/item{n}.xml".encode() in document_rels
+    package_rels = zipfile.ZipFile(out).read("_rels/.rels")
+    assert f"customXml/item{n}.xml".encode() not in package_rels
 
 
 def test_embed_preserves_words_own_bibliography_sources(base_docx, tmp_path):
@@ -248,14 +254,10 @@ def test_datastore_item_id_is_a_valid_ooxml_guid(tmp_path):
     on the Phase 1 spike fixture, which would have been read as evidence that
     content controls do not survive Word.
     """
-    from citebind.part import DATASTORE_ITEM_ID
-
     st_guid = re.compile(
         r"^\{[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}\}$"
     )
-    assert st_guid.match(DATASTORE_ITEM_ID)
 
-    # and it must reach the document, not just the constant
     document = Document()
     document.add_paragraph("Body.")
     plain = tmp_path / "plain.docx"

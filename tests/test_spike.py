@@ -119,16 +119,19 @@ def drop_payload_parts(src, dst):
         assert ours is not None
         n = _re.match(r"^customXml/item(\d+)\.xml$", ours).group(1)
         drop = {ours, f"customXml/itemProps{n}.xml", f"customXml/_rels/item{n}.xml.rels"}
-        rels = etree.fromstring(zin.read("_rels/.rels"))
+        # The relationship lives in the MAIN DOCUMENT part's rels, where Word
+        # puts it, and its target is relative to word/_rels/.
+        rels_part = "word/_rels/document.xml.rels"
+        rels = etree.fromstring(zin.read(rels_part))
         for rel in list(rels):
-            if rel.get("Target") == ours:
+            if rel.get("Target") in (ours, f"../{ours}"):
                 rels.remove(rel)
         new_rels = etree.tostring(rels, xml_declaration=True, encoding="UTF-8")
         with zipfile.ZipFile(dst, "w", zipfile.ZIP_DEFLATED) as zout:
             for item in zin.infolist():
                 if item.filename in drop:
                     continue
-                if item.filename == "_rels/.rels":
+                if item.filename == rels_part:
                     zout.writestr(item.filename, new_rels)
                 else:
                     zout.writestr(item.filename, zin.read(item.filename))
