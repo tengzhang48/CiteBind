@@ -60,6 +60,7 @@ class FindingKind(str, Enum):
     CITATION_CONTROL_EMPTY = "citation_control_empty"
     CITATION_CONTROLS_INCONSISTENT = "citation_controls_inconsistent"
     BIBLIOGRAPHY_CONTROL_MISSING = "bibliography_control_missing"
+    BIBLIOGRAPHY_CONTROL_DUPLICATE = "bibliography_control_duplicate"
     BIBLIOGRAPHY_COUNT_MISMATCH = "bibliography_count_mismatch"
     VISIBLE_TEXT_MISMATCH = "visible_text_mismatch"
     RENDERING_UNAVAILABLE = "rendering_unavailable"
@@ -78,6 +79,7 @@ _SEVERITY = {
     FindingKind.CITATION_CONTROL_EMPTY: "error",
     FindingKind.CITATION_CONTROLS_INCONSISTENT: "warning",
     FindingKind.BIBLIOGRAPHY_CONTROL_MISSING: "error",
+    FindingKind.BIBLIOGRAPHY_CONTROL_DUPLICATE: "error",
     FindingKind.BIBLIOGRAPHY_COUNT_MISMATCH: "warning",
     FindingKind.VISIBLE_TEXT_MISMATCH: "error",
     FindingKind.RENDERING_UNAVAILABLE: "note",
@@ -112,6 +114,10 @@ class Report:
     control_texts: dict[str, list[str]]
     inventory: dict[str, int]
     findings: list[Finding] = field(default_factory=list)
+    # The parsed payload, so diff can compare what references SAY and not only
+    # which ids exist. inspect has already parsed it; withholding it forced
+    # diff to treat a reference as an opaque presence.
+    payload: Optional[dict] = None
 
     @property
     def is_clean(self) -> bool:
@@ -127,6 +133,8 @@ class DiffKind(str, Enum):
     REFERENCE_GAINED = "reference_gained"
     CLUSTER_LOST = "cluster_lost"
     CLUSTER_GAINED = "cluster_gained"
+    REFERENCE_CHANGED = "reference_changed"
+    CLUSTER_CHANGED = "cluster_changed"
     CONTROL_LOST = "control_lost"
     CONTROL_GAINED = "control_gained"
     CONTROL_RENAMED = "control_renamed"
@@ -154,6 +162,7 @@ class DiffReport:
 class _BodyScan:
     citation_texts: dict[str, list[str]]
     bibliography_present: bool
+    bibliography_count: int
     bibliography_entry_count: int
     bibliography_entries: list[str]
     control_tags: list[str]
@@ -172,6 +181,7 @@ def _scan_body(root) -> _BodyScan:
     scan = _BodyScan(
         citation_texts={},
         bibliography_present=False,
+        bibliography_count=0,
         bibliography_entry_count=0,
         bibliography_entries=[],
         control_tags=[],
@@ -188,6 +198,7 @@ def _scan_body(root) -> _BodyScan:
             scan.control_texts.setdefault(sc.tag, []).append(sc.text)
         elif sc.kind == "bibliography":
             scan.bibliography_present = True
+            scan.bibliography_count += 1
             scan.bibliography_entry_count = len(sc.entries)
             scan.bibliography_entries = list(sc.entries)
             scan.control_tags.append(sc.tag)
@@ -305,6 +316,15 @@ def inspect(docx_path: Union[str, Path]) -> Report:
                 )
             )
         elif scan.bibliography_present:
+            if scan.bibliography_count > 1:
+                findings.append(
+                    _finding(
+                        FindingKind.BIBLIOGRAPHY_CONTROL_DUPLICATE,
+                        f"{scan.bibliography_count} bibliography controls in one "
+                        "document; there is one bibliography, so the others are "
+                        "stale copies and only the last was graded",
+                    )
+                )
             cited = _cited_reference_ids(raw)
             cited_existing = cited & set(reference_ids)
             if scan.bibliography_entry_count != len(cited_existing):
@@ -344,6 +364,7 @@ def inspect(docx_path: Union[str, Path]) -> Report:
         control_texts=scan.control_texts,
         inventory=scan.inventory,
         findings=findings,
+        payload=raw,
     )
 
 
@@ -500,6 +521,47 @@ def _finding(kind: FindingKind, detail: str) -> Finding:
     return Finding(kind=kind, severity=_SEVERITY[kind], detail=detail)
 
 
+def _by_id(payload: Optional[dict], key: str) -> dict[str, dict]:
+    entries = (payload or {}).get(key)
+    if not isinstance(entries, list):
+        return {}
+    return {
+        entry.get("id"): entry
+        for entry in entries
+        if isinstance(entry, dict) and entry.get("id")
+    }
+
+
+def _content_changes(
+    before: Optional[dict], after: Optional[dict], key: str, kind: DiffKind
+) -> list[DiffItem]:
+    """Report entries that exist in both documents but no longer say the same.
+
+    diff used to compare ids only, so a handoff that rewrote a reference's
+    title, year, or authors -- or deleted a required field outright, leaving a
+    payload that no longer validates -- came back "no differences". Presence
+    was standing in for identity: a reference is what it CLAIMS, not merely
+    that its id is still in the list.
+    """
+    before_by_id = _by_id(before, key)
+    after_by_id = _by_id(after, key)
+    items: list[DiffItem] = []
+    for entry_id in sorted(set(before_by_id) & set(after_by_id)):
+        old, new = before_by_id[entry_id], after_by_id[entry_id]
+        if old == new:
+            continue
+        changed = sorted(
+            field_name
+            for field_name in set(old) | set(new)
+            if old.get(field_name) != new.get(field_name)
+        )
+        details = "; ".join(
+            f"{name}: {old.get(name)!r} -> {new.get(name)!r}" for name in changed
+        )
+        items.append(DiffItem(kind, f"'{entry_id}' changed — {details}"))
+    return items
+
+
 def diff(before_path: Union[str, Path], after_path: Union[str, Path]) -> DiffReport:
     before = inspect(before_path)
     after = inspect(after_path)
@@ -537,6 +599,20 @@ def diff(before_path: Union[str, Path], after_path: Union[str, Path]) -> DiffRep
         items.append(DiffItem(DiffKind.REFERENCE_LOST, f"reference '{ref_id}' disappeared"))
     for ref_id in sorted(after_refs - before_refs):
         items.append(DiffItem(DiffKind.REFERENCE_GAINED, f"reference '{ref_id}' appeared"))
+
+    items.extend(
+        _content_changes(
+            before.payload, after.payload, "references", DiffKind.REFERENCE_CHANGED
+        )
+    )
+    items.extend(
+        _content_changes(
+            before.payload,
+            after.payload,
+            "citation_clusters",
+            DiffKind.CLUSTER_CHANGED,
+        )
+    )
 
     before_clusters, after_clusters = set(before.cluster_ids), set(after.cluster_ids)
     for cluster_id in sorted(before_clusters - after_clusters):

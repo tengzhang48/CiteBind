@@ -19,7 +19,7 @@ from citebind.model import CiteBindDocument
 from citebind.part import embed
 from citebind.__main__ import main
 from citebind.rendering import render
-from citebind.verify import FindingKind, diff, inspect
+from citebind.verify import DiffKind, FindingKind, diff, inspect
 
 W_NS = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
 
@@ -397,6 +397,27 @@ def fixture_rendering_unavailable(clean_spike, tmp_path):
     return out
 
 
+def fixture_bibliography_control_duplicate(clean_spike, tmp_path):
+    """Two bibliography controls in one document.
+
+    Not hypothetical: step 4 of the Word spike copies a citation into another
+    document, and a paste that carries a bibliography control back would leave
+    exactly this. The verifier used to report it CLEAN, because the scan kept
+    only the last control's entry count and no finding named the duplication.
+    """
+    out = tmp_path / "two_bibliographies.docx"
+
+    def duplicate_bibliography(tree):
+        for sdt in list(tree.iter(q("sdt"))):
+            tag = sdt.find(f"{q('sdtPr')}/{q('tag')}")
+            if tag is not None and tag.get(q("val")) == "citebind:bibliography":
+                sdt.addnext(copy.deepcopy(sdt))
+                break
+
+    transform_document(clean_spike, duplicate_bibliography, out)
+    return out
+
+
 FIXTURE_FOR_KIND = {
     FindingKind.PAYLOAD_PART_MISSING: damage_payload_removed,
     FindingKind.PAYLOAD_INVALID: fixture_payload_invalid,
@@ -413,6 +434,7 @@ FIXTURE_FOR_KIND = {
     FindingKind.BIBLIOGRAPHY_COUNT_MISMATCH: fixture_bibliography_count_mismatch,
     FindingKind.VISIBLE_TEXT_MISMATCH: fixture_visible_text_mismatch,
     FindingKind.RENDERING_UNAVAILABLE: fixture_rendering_unavailable,
+    FindingKind.BIBLIOGRAPHY_CONTROL_DUPLICATE: fixture_bibliography_control_duplicate,
 }
 
 
@@ -605,3 +627,224 @@ def test_payload_missing_authors_is_reported_not_a_traceback(clean_spike, tmp_pa
     kinds = [f.kind for f in report.findings]
     assert FindingKind.PAYLOAD_INVALID in kinds, kinds
     assert "authors" in " ".join(f.detail for f in report.findings)
+
+
+def _rewrite_payload_field(source, out, transform):
+    """Edit one field inside the payload part of a copy of ``source``."""
+
+    def apply(tree):
+        transform(tree)
+
+    transform_payload(source, apply, out)
+    return out
+
+
+def test_diff_reports_a_reference_whose_metadata_was_rewritten(clean_spike, tmp_path):
+    """REGRESSION. diff compared reference IDs by presence only, so a handoff
+    that rewrote a reference's year or title came back "no differences" — the
+    id was still in the list, so nothing had "changed". Presence was standing
+    in for identity: a reference is what it claims, not that its id survived.
+    """
+    out = tmp_path / "rewritten.docx"
+
+    def rewrite_year(tree):
+        year = tree.find(
+            "{urn:citebind:citebind:1}references/"
+            "{urn:citebind:citebind:1}reference/{urn:citebind:citebind:1}year"
+        )
+        year.text = "1999"
+
+    _rewrite_payload_field(clean_spike, out, rewrite_year)
+    report = diff(clean_spike, out)
+    changed = [i for i in report.items if i.kind == DiffKind.REFERENCE_CHANGED]
+    assert changed, [i.kind.value for i in report.items]
+    assert "1999" in changed[0].detail
+
+
+def test_diff_reports_a_reference_that_lost_a_required_field(clean_spike, tmp_path):
+    """The sharper case: the document went from valid to INVALID — a required
+    field deleted outright — and diff reported no differences at all."""
+    out = tmp_path / "field_deleted.docx"
+
+    def drop_authors(tree):
+        for node in list(tree.iter("{urn:citebind:citebind:1}authors")):
+            node.getparent().remove(node)
+
+    _rewrite_payload_field(clean_spike, out, drop_authors)
+    report = diff(clean_spike, out)
+    assert DiffKind.REFERENCE_CHANGED in [i.kind for i in report.items]
+
+
+def test_diff_of_a_document_with_itself_is_still_clean(clean_spike):
+    """The content comparison must not invent differences."""
+    assert diff(clean_spike, clean_spike).items == []
+
+
+# --- diff completeness, mirroring the rule already enforced for findings -----
+#
+# FindingKind has had an exhaustiveness gate since T-05: a kind without a
+# fixture that produces it fails the suite. DiffKind had no such gate, which
+# is how REFERENCE_CHANGED and CLUSTER_CHANGED were added with nothing forcing
+# a demonstration. Each entry below must be a PAIR of documents that really
+# produces its kind.
+
+
+def diff_pair_payload_lost(clean_spike, tmp_path):
+    out = tmp_path / "d_lost.docx"
+    drop_citebind_part(clean_spike, out)
+    return clean_spike, out
+
+
+def diff_pair_payload_gained(clean_spike, tmp_path):
+    out = tmp_path / "d_gained.docx"
+    drop_citebind_part(clean_spike, out)
+    return out, clean_spike
+
+
+def diff_pair_schema_version_changed(clean_spike, tmp_path):
+    out = tmp_path / "d_schema.docx"
+
+    def bump(tree):
+        tree.set("schema_version", "2")
+
+    transform_payload(clean_spike, bump, out)
+    return clean_spike, out
+
+
+def diff_pair_style_changed(clean_spike, tmp_path):
+    out = tmp_path / "d_style.docx"
+
+    def restyle(tree):
+        tree.find("{urn:citebind:citebind:1}selected_style").text = "author-year"
+
+    transform_payload(clean_spike, restyle, out)
+    return clean_spike, out
+
+
+def diff_pair_reference_lost(clean_spike, tmp_path):
+    return clean_spike, damage_reference_deleted(clean_spike, tmp_path)
+
+
+def diff_pair_reference_gained(clean_spike, tmp_path):
+    return damage_reference_deleted(clean_spike, tmp_path), clean_spike
+
+
+def diff_pair_cluster_lost(clean_spike, tmp_path):
+    return clean_spike, fixture_control_tag_without_cluster(clean_spike, tmp_path)
+
+
+def diff_pair_cluster_gained(clean_spike, tmp_path):
+    return fixture_control_tag_without_cluster(clean_spike, tmp_path), clean_spike
+
+
+def diff_pair_control_lost(clean_spike, tmp_path):
+    return clean_spike, damage_controls_stripped(clean_spike, tmp_path)
+
+
+def diff_pair_control_gained(clean_spike, tmp_path):
+    return damage_controls_stripped(clean_spike, tmp_path), clean_spike
+
+
+def diff_pair_control_renamed(clean_spike, tmp_path):
+    out = tmp_path / "d_renamed.docx"
+
+    def rename(tree):
+        tag = first_citation_sdt(tree).find(f"{q('sdtPr')}/{q('tag')}")
+        tag.set(q("val"), "citebind:citation:C999")
+
+    transform_document(clean_spike, rename, out)
+    return clean_spike, out
+
+
+def diff_pair_control_text_altered(clean_spike, tmp_path):
+    return clean_spike, damage_visible_text_edited(clean_spike, tmp_path)
+
+
+def diff_pair_reference_changed(clean_spike, tmp_path):
+    out = tmp_path / "d_ref_changed.docx"
+
+    def rewrite(tree):
+        tree.find(
+            "{urn:citebind:citebind:1}references/"
+            "{urn:citebind:citebind:1}reference/{urn:citebind:citebind:1}year"
+        ).text = "1999"
+
+    transform_payload(clean_spike, rewrite, out)
+    return clean_spike, out
+
+
+def diff_pair_cluster_changed(clean_spike, tmp_path):
+    out = tmp_path / "d_cluster_changed.docx"
+
+    def add_locator(tree):
+        cluster = tree.find(
+            "{urn:citebind:citebind:1}citation_clusters/"
+            "{urn:citebind:citebind:1}cluster"
+        )
+        etree.SubElement(cluster, "{urn:citebind:citebind:1}locator").text = "12"
+
+    transform_payload(clean_spike, add_locator, out)
+    return clean_spike, out
+
+
+def diff_pair_field_introduced(clean_spike, tmp_path):
+    """A Word field appears where CiteBind uses content controls — what a
+    reference manager's own citation would look like arriving in the file."""
+    out = tmp_path / "d_field.docx"
+
+    def add_field(tree):
+        body = tree.find(q("body"))
+        paragraph = etree.SubElement(body, q("p"))
+        etree.SubElement(paragraph, q("fldSimple")).set(q("instr"), "CITATION Bel10")
+
+    transform_document(clean_spike, add_field, out)
+    return clean_spike, out
+
+
+def diff_pair_sdt_count_changed(clean_spike, tmp_path):
+    """An sdt appears that no citebind tag accounts for, so the control-tag
+    bookkeeping cannot explain the change in sdt count."""
+    out = tmp_path / "d_sdt_count.docx"
+
+    def add_foreign_sdt(tree):
+        body = tree.find(q("body"))
+        sdt = etree.SubElement(body, q("sdt"))
+        properties = etree.SubElement(sdt, q("sdtPr"))
+        etree.SubElement(properties, q("tag")).set(q("val"), "someone-elses-control")
+        etree.SubElement(sdt, q("sdtContent"))
+
+    transform_document(clean_spike, add_foreign_sdt, out)
+    return clean_spike, out
+
+
+PAIR_FOR_DIFF_KIND = {
+    DiffKind.PAYLOAD_LOST: diff_pair_payload_lost,
+    DiffKind.PAYLOAD_GAINED: diff_pair_payload_gained,
+    DiffKind.SCHEMA_VERSION_CHANGED: diff_pair_schema_version_changed,
+    DiffKind.STYLE_CHANGED: diff_pair_style_changed,
+    DiffKind.REFERENCE_LOST: diff_pair_reference_lost,
+    DiffKind.REFERENCE_GAINED: diff_pair_reference_gained,
+    DiffKind.CLUSTER_LOST: diff_pair_cluster_lost,
+    DiffKind.CLUSTER_GAINED: diff_pair_cluster_gained,
+    DiffKind.CONTROL_LOST: diff_pair_control_lost,
+    DiffKind.CONTROL_GAINED: diff_pair_control_gained,
+    DiffKind.CONTROL_RENAMED: diff_pair_control_renamed,
+    DiffKind.CONTROL_TEXT_ALTERED: diff_pair_control_text_altered,
+    DiffKind.REFERENCE_CHANGED: diff_pair_reference_changed,
+    DiffKind.CLUSTER_CHANGED: diff_pair_cluster_changed,
+    DiffKind.FIELD_INTRODUCED: diff_pair_field_introduced,
+    DiffKind.SDT_COUNT_CHANGED: diff_pair_sdt_count_changed,
+}
+
+
+def test_every_diff_kind_is_covered_by_a_pair():
+    assert set(PAIR_FOR_DIFF_KIND) == set(DiffKind)
+
+
+@pytest.mark.parametrize("kind", sorted(DiffKind, key=lambda k: k.value))
+def test_each_diff_kind_is_produced_by_its_pair(clean_spike, tmp_path, kind):
+    before, after = PAIR_FOR_DIFF_KIND[kind](clean_spike, tmp_path)
+    report = diff(before, after)
+    assert kind in [item.kind for item in report.items], (
+        f"{kind.value} not produced; got {[i.kind.value for i in report.items]}"
+    )
