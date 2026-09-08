@@ -10,7 +10,7 @@ never installed CiteBind — and every citation-to-reference relationship is
 still recoverable, with no external library, account, or sync service.
 
 > **Status: Phases 2 and 3 complete, Phase 1 unfinished.** References resolve,
-> render, and verify from Python (315 tests, on the `phase1-spike` branch). No
+> render, and verify from Python (317 tests, on the `phase1-spike` branch). No
 > Word add-in code has been written, and Phase 1's exit condition still needs a
 > human running the spike document in Word. See
 > [§ Current status](#current-status).
@@ -147,7 +147,7 @@ selection; the `citebind/1` custom XML part; tagged content controls;
 deterministic rendering of citations and the bibliography in one numeric and
 one author–year style, with named refusals where it cannot be correct; the
 Phase 1 spike kit (`make-spike` and `check-spike`); and an `inspect` / `diff`
-CLI. 315 tests, all passing.
+CLI. 317 tests, all passing.
 
 **Not implemented: the add-in itself.** There is no Office.js project. The
 Python above is a resolver library and a document-inspection kit — it can write

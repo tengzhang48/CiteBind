@@ -324,6 +324,15 @@ def _item_props_xml(item_id: str) -> bytes:
         f"{ds}datastoreItem", nsmap={"ds": CUSTOM_XML_DATASTORE_NS}
     )
     root.set(f"{ds}itemID", item_id)
+    # Word writes a schemaRefs naming the data part's namespace -- its own
+    # bibliography part in the same package does exactly this. The element is
+    # optional in the schema, so omitting it was not a conformance error, but
+    # it made our part the one custom XML part in the document that did not
+    # declare what it holds. Immediately before a Word experiment, an
+    # unexplained difference from Word's own shape is a candidate explanation
+    # for any failure we observe, and this one costs two elements to remove.
+    refs = etree.SubElement(root, f"{ds}schemaRefs")
+    etree.SubElement(refs, f"{ds}schemaRef").set(f"{ds}uri", CITEBIND_NS)
     return etree.tostring(
         etree.ElementTree(root), xml_declaration=True, encoding="UTF-8"
     )
@@ -457,6 +466,18 @@ def embed(
     """
     payload = payload_to_xml(doc)
     with zipfile.ZipFile(docx_path) as source:
+        present = set(source.namelist())
+        for required in (CONTENT_TYPES_PART, PACKAGE_RELS_PART, DOCUMENT_RELS_PART):
+            if required not in present:
+                # Named, like every other refusal here. embed reads these three
+                # parts to wire the payload in, and a package missing one is
+                # not a DOCX we can extend -- previously a bare KeyError from
+                # inside zipfile, three frames below the caller.
+                raise PayloadError(
+                    "not_a_word_package",
+                    f"{docx_path} has no {required}; it is not a Word document "
+                    "this library can embed into",
+                )
         existing = find_citebind_part(source)
         if existing is not None:
             current_root = parse_xml_hardened(source.read(existing))
@@ -479,9 +500,7 @@ def embed(
                 item_id = current.get(f"{{{CUSTOM_XML_DATASTORE_NS}}}itemID")
             except (UnsafeXML, etree.XMLSyntaxError):
                 item_id = None
-        if item_id:
-            taken = taken - {item_id}
-        else:
+        if not item_id:
             item_id = _datastore_item_id(n, taken)
         replacements: dict[str, bytes] = {
             part_name: payload,

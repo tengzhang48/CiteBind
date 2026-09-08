@@ -12,6 +12,7 @@ import re
 import zipfile
 
 import pytest
+from lxml import etree
 from docx import Document
 
 from citebind.model import CiteBindDocument
@@ -274,3 +275,42 @@ def test_datastore_item_id_is_a_valid_ooxml_guid(tmp_path):
     assert found, "no itemProps part carried an itemID"
     for value in found:
         assert st_guid.match(value), f"{value} is not a valid ST_Guid"
+
+
+def test_item_props_declares_our_namespace_like_word_declares_its_own(base_docx, tmp_path):
+    """Word's own custom XML part in the same package carries a schemaRefs
+    naming the namespace of its data (the bibliography namespace). Ours carried
+    none, making it the only custom XML part in the document that did not say
+    what it holds.
+
+    The element is optional, so this was never a conformance failure. It is
+    here because the Word spike is about to interpret whatever Word does to
+    this part, and an unexplained difference from Word's own shape would be a
+    live candidate explanation for any failure observed.
+    """
+    out = tmp_path / "props.docx"
+    used = embed(base_docx, CiteBindDocument.from_dict(wellformed_minimal_doi()), out)
+    n = item_number(used)
+    ds = "http://schemas.openxmlformats.org/officeDocument/2006/customXml"
+    props = etree.fromstring(
+        zipfile.ZipFile(out).read(f"customXml/itemProps{n}.xml")
+    )
+    refs = props.findall(f"{{{ds}}}schemaRefs/{{{ds}}}schemaRef")
+    assert [r.get(f"{{{ds}}}uri") for r in refs] == ["urn:citebind:citebind:1"]
+
+
+def test_embed_refuses_a_package_that_is_not_a_word_document(base_docx, tmp_path):
+    """embed reads three parts to wire the payload in. A package missing one
+    raised a bare KeyError from inside zipfile, three frames below the caller —
+    the same unnamed-crash shape this library keeps closing elsewhere."""
+    import zipfile as zf
+
+    stripped = tmp_path / "stripped.docx"
+    with zf.ZipFile(base_docx) as source, zf.ZipFile(stripped, "w") as target:
+        for item in source.infolist():
+            if item.filename == "word/_rels/document.xml.rels":
+                continue
+            target.writestr(item.filename, source.read(item.filename))
+    with pytest.raises(PayloadError) as caught:
+        embed(stripped, CiteBindDocument.from_dict(wellformed_minimal_doi()), tmp_path / "o.docx")
+    assert caught.value.code == "not_a_word_package"
