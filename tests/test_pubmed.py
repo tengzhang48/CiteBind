@@ -151,3 +151,37 @@ def _tmp():
     import tempfile
 
     return Path(tempfile.mkdtemp())
+
+
+class _Canned:
+    def __init__(self, body):
+        self.body = body if isinstance(body, bytes) else json.dumps(body).encode()
+
+    def fetch(self, url):
+        from citebind.transport import TransportResponse
+
+        return TransportResponse(status=200, body=self.body)
+
+
+@pytest.mark.parametrize(
+    "authors", ["a string", ["a plain string"], 7], ids=["string", "list-of-strings", "number"]
+)
+def test_malformed_authors_field_is_refused_rather_than_filtered(authors):
+    """REGRESSION, and the subtler half of the pair.
+
+    PubMed's parser filtered its author list with ``isinstance(author, dict)``,
+    so a malformed field did not crash — it silently produced a reference with
+    NO authors. That is data loss dressed as a record whose authors happened to
+    be absent, and absence is supposed to mean the source said nothing.
+    """
+    from citebind.pubmed import ResponseShapeError
+
+    body = {
+        "result": {
+            "uids": ["1"],
+            "1": {"title": "T", "source": "J", "pubdate": "2024", "authors": authors},
+        }
+    }
+    with pytest.raises(ResponseShapeError) as caught:
+        resolve_pmid("1", _Canned(body), "R001", "2026-09-08T00:00:00Z")
+    assert caught.value.code == "unexpected_shape"

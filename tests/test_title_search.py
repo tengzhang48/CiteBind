@@ -158,3 +158,25 @@ def test_selection_re_fetches_by_identifier_rather_than_trusting_search(tmp_path
     with pytest.raises(TransportError) as e:
         select(result.candidates[0], search_only, reference_id="R001", retrieved_at="2026-08-31T00:00:00Z")
     assert e.value.code == CODE_URL_NOT_RECORDED
+
+
+class _Canned:
+    def __init__(self, body):
+        self.body = body if isinstance(body, bytes) else json.dumps(body).encode()
+
+    def fetch(self, url):
+        from citebind.transport import TransportResponse
+
+        return TransportResponse(status=200, body=self.body)
+
+
+@pytest.mark.parametrize(
+    "items", ["nope", ["a plain string"], 7], ids=["string", "list-of-strings", "number"]
+)
+def test_malformed_search_items_are_refused_by_name(items):
+    """REGRESSION: same defect as the resolver's author field, one layer up."""
+    from citebind.crossref import ResponseShapeError
+
+    with pytest.raises(ResponseShapeError) as caught:
+        search_title("some title", crossref=_Canned({"message": {"items": items}}))
+    assert caught.value.code == "unexpected_shape"

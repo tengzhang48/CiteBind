@@ -9,6 +9,8 @@ that constant is an independent oracle for this resolver.
 
 from pathlib import Path
 
+import json
+
 import pytest
 
 from citebind.crossref import resolve_doi
@@ -162,3 +164,42 @@ def test_unrecorded_url_refused_by_name():
             retrieved_at="2026-08-31T00:00:00Z",
         )
     assert e.value.code == CODE_URL_NOT_RECORDED
+
+
+class _Canned:
+    """A transport that returns one body, for shapes no recording contains."""
+
+    def __init__(self, body):
+        self.body = body if isinstance(body, bytes) else json.dumps(body).encode()
+
+    def fetch(self, url):
+        from citebind.transport import TransportResponse
+
+        return TransportResponse(status=200, body=self.body)
+
+
+@pytest.mark.parametrize(
+    "author",
+    ["not a list", ["a plain string"], {"family": "Solo"}, 7],
+    ids=["string", "list-of-strings", "bare-mapping", "number"],
+)
+def test_malformed_author_field_is_refused_by_name(author):
+    """REGRESSION. Crossref is a live external API, and an error page, a shape
+    change, or a proxy's rewritten body can put a string where the list of
+    author objects belongs. Iterating a string yields characters, so
+    ``author.get`` raised AttributeError from two frames down — an unnamed
+    crash in a module whose entire design is refusing by name.
+    """
+    from citebind.crossref import ResponseShapeError
+
+    body = {
+        "message": {
+            "title": ["T"],
+            "container-title": ["J"],
+            "author": author,
+            "published": {"date-parts": [[2024]]},
+        }
+    }
+    with pytest.raises(ResponseShapeError) as caught:
+        resolve_doi("10.1000/x", _Canned(body), "R001", "2026-09-08T00:00:00Z")
+    assert caught.value.code == "unexpected_shape"

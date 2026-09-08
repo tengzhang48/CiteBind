@@ -67,9 +67,31 @@ def _year(message: dict) -> Optional[int]:
     return None
 
 
+def _authors_of(message: dict) -> list[dict]:
+    """The response's author list, or a NAMED refusal if it is not one.
+
+    Crossref is a live external API: an error page, a shape change, or a
+    proxy's rewritten body can put a string where a list of mappings belongs.
+    Iterating a string yields characters, so ``author.get`` then raised
+    AttributeError from two frames down -- an unnamed crash in a module whose
+    whole design is refusing by name.
+    """
+    authors = message.get("author")
+    if authors is None:
+        return []
+    if not isinstance(authors, list) or not all(
+        isinstance(author, dict) for author in authors
+    ):
+        raise ResponseShapeError(
+            "Crossref 'author' is not a list of author objects; "
+            f"got {type(authors).__name__}"
+        )
+    return authors
+
+
 def _author_names(message: dict) -> list[str]:
     names: list[str] = []
-    for author in message.get("author") or []:
+    for author in _authors_of(message):
         if "name" in author:  # organizational author
             names.append(author["name"])
         else:
@@ -89,7 +111,7 @@ def _author_structured(message: dict) -> list[dict]:
     enforces.
     """
     names: list[dict] = []
-    for author in message.get("author") or []:
+    for author in _authors_of(message):
         if "name" in author:
             names.append({"literal": author["name"]})
         else:

@@ -36,6 +36,13 @@ PUBMED_SUMMARY_URL = (
 )
 
 
+class ResponseShapeError(ResponseError):
+    """The response parsed as JSON but is not a shape we can use."""
+
+    def __init__(self, detail: str):
+        super().__init__("unexpected_shape", detail)
+
+
 class RecordNotFoundError(ResponseError):
     """PubMed answered, but has no summary for this PMID."""
 
@@ -100,12 +107,26 @@ def summary_to_fields(pmid: str, doc: dict) -> dict:
             "a citebind reference cannot be built from it"
         )
 
+    authors = doc.get("authors")
+    if authors is not None and (
+        not isinstance(authors, list)
+        or not all(isinstance(author, dict) for author in authors)
+    ):
+        # Present but not a list of mappings: a shape we cannot read. Refused
+        # rather than filtered, because filtering a malformed field silently
+        # produced a reference with NO authors -- data loss dressed as a
+        # record whose authors were simply absent.
+        raise ResponseShapeError(
+            f"PubMed 'authors' for '{pmid}' is not a list of author objects; "
+            f"got {type(authors).__name__}"
+        )
+
     result: dict = {
         "title": title,
         "authors": [
             author["name"]
-            for author in doc.get("authors") or []
-            if isinstance(author, dict) and author.get("name")
+            for author in authors or []
+            if author.get("name")
         ],
         "journal": journal,
         "year": year,

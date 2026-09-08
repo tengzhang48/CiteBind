@@ -16,7 +16,12 @@ prevent.
 from dataclasses import dataclass
 from typing import Optional
 
-from .crossref import resolve_doi, title_search_url, work_to_fields
+from .crossref import (
+    ResponseShapeError,
+    resolve_doi,
+    title_search_url,
+    work_to_fields,
+)
 from .identifiers import normalize_doi
 from .model import Reference
 from .pubmed import PUBMED_SUMMARY_URL, resolve_pmid, summary_to_fields
@@ -62,6 +67,14 @@ def _crossref_candidates(title: str, transport: Transport, rows: int) -> list[Ca
         if isinstance(document, dict)
         else None
     )
+    if items is not None and (
+        not isinstance(items, list)
+        or not all(isinstance(item, dict) for item in items)
+    ):
+        raise ResponseShapeError(
+            "Crossref search 'items' is not a list of work objects; "
+            f"got {type(items).__name__}"
+        )
     require_non_empty(items or [], source="crossref", what="title search")
     candidates: list[Candidate] = []
     for item in items:
