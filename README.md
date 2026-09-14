@@ -1,166 +1,126 @@
 # CiteBind
 
-**Verified references that travel with your manuscript.**
+Recover embedded references from Word documents, export them to reference
+managers, and inspect citation data stored inside a DOCX.
 
-CiteBind is a planned Microsoft Word add-in that stores a manuscript's
-bibliographic records *inside the DOCX itself*. Citations and the bibliography
-are rendered deterministically from that embedded data, so a document can be
-saved, emailed, reopened on another machine, or handed to a coauthor who has
-never installed CiteBind — and every citation-to-reference relationship is
-still recoverable, with no external library, account, or sync service.
+**Status: experimental Python package.** EndNote/Zotero reference recovery and
+exports work from the command line. The planned Word add-in is not implemented.
+Native Word, EndNote, and Zotero compatibility checks remain in progress.
 
-> **Status: pre-implementation.** This repository currently contains the
-> development plan only. No add-in code has been written. See
-> [§ Current status](#current-status).
+## What you can use today
 
-## The problem
+| Feature | Available behavior |
+| --- | --- |
+| Recover EndNote references | Read embedded Traveling Library records from supported Word citation fields. |
+| Recover Zotero references | Read embedded item data from supported Word citation fields. |
+| Export records | Save a detailed JSON report, CSL-JSON, RIS, BibTeX, or native EndNote XML. |
+| Inspect CiteBind documents | Check CiteBind's embedded records, citation links, and displayed text; compare two DOCX files. |
+| Python library | Resolve references through Crossref/PubMed, compare metadata, and create/render CiteBind structures. |
 
-Reference managers keep the library somewhere else — a local database, a cloud
-account, a plugin's private store. The manuscript holds fragile pointers into
-it. When the document travels and the library does not, citations decay:
-fields go dead, numbering drifts, metadata silently changes, and a coauthor
-without the same tool sees something different from what the author wrote.
+Recovery reads the source DOCX without rewriting it. Existing native citation
+fields stay in the original document. Recovered metadata is **not independently
+verified**, and importing an exported reference file does not automatically
+relink Word citations to a new library.
 
-CiteBind inverts that. The document *is* the library.
+EndNote and Zotero already embed reference data in Word documents. CiteBind
+provides a separate way to inspect and recover that data without requiring the
+original reference library.
 
-## How it works
+## Install from source
 
-```text
-Crossref / PubMed
-        |
-        v
-  CiteBind Word add-in
-  search, verify, insert,
-  format, update
-        |
-        v
- self-contained DOCX
-        |
-        v
-     ArtifactCert
-  inspect and verify only
-        |
-        v
-   checked handoff
+Requires **Python 3.11 or newer** and Git for the clone command. You can also
+download and extract the repository ZIP, then open a terminal in that folder.
+Microsoft Word is not required to run the Python tools.
+
+```console
+git clone https://github.com/tengzhang48/CiteBind.git
+cd CiteBind
 ```
 
-1. The researcher enters an exact title, DOI, or PMID.
-2. CiteBind queries Crossref and/or PubMed directly.
-3. The researcher selects and confirms the correct record.
-4. Normalized metadata is stored in a versioned custom XML part in the DOCX.
-5. A tagged content control is inserted at the cursor for the citation.
-6. A maintained CSL processor renders citations and the bibliography
-   deterministically from the embedded records.
-7. The document is saved, shared, and reopened — still self-contained.
+On Windows, in PowerShell:
 
-### AI is optional and subordinate
-
-AI may normalize an entered title, rank search candidates, or explain a
-metadata disagreement between sources. It **must never** invent identifiers or
-bibliographic metadata, and it **must not** render the final citation format.
-Ordinary DOI, PMID, and exact-title lookup does not depend on a model at all.
-
-## The document contract
-
-A versioned custom XML part, `citebind/1`, holds:
-
-```text
-document
-  schema_version
-  selected_style
-  references
-    R001
-      DOI and/or PMID
-      title, authors, journal, year
-      volume/issue/pages when available
-      metadata_source
-      retrieved_at
-  citation_clusters
-    C001
-      ordered reference IDs
-      optional locator/prefix/suffix
+```powershell
+py -3 -m venv .venv
+.venv\Scripts\python.exe -m pip install .
+.venv\Scripts\python.exe -m citebind --help
 ```
 
-In the Word body, each citation cluster is an inline content control tagged
-`citebind:citation:C001`, and the bibliography is a content control tagged
-`citebind:bibliography`. Visible text is generated from the embedded data and
-the selected CSL style.
+On Linux or macOS:
 
-No provenance digests, permissions, approval states, or event ledger in v1.
-Fields get added only when a real, reproduced failure requires them.
+```console
+python3 -m venv .venv
+.venv/bin/python -m pip install .
+.venv/bin/python -m citebind --help
+```
 
-## Scope of the first version
+In the examples below, replace `python` with the virtual environment's Python
+path shown above. Installation downloads Python dependencies; reference recovery
+and document inspection run locally without a network connection or an AI model.
+Crossref/PubMed lookup functions use those services over the network.
 
-**In scope:** journal articles resolved by DOI and/or PMID; one numeric style
-and one author–year style; Word desktop on Windows and macOS; export to
-CSL-JSON and BibTeX.
+## Recover references
 
-**Out of scope:** general literature discovery or deep research; a global
-Zotero/EndNote-style library; PDF organization or annotation; collaborative
-editing; cloud accounts or sync; being an ArtifactCert subsystem; guaranteed
-identical behavior in Word Online.
+```console
+python -m citebind recover-references manuscript.docx --out recovery.json
+python -m citebind recover-references manuscript.docx --format ris --out references.ris
+python -m citebind recover-references manuscript.docx --format csl-json --out references.json
+python -m citebind recover-references manuscript.docx --format bibtex --out references.bib
+python -m citebind recover-references endnote-manuscript.docx --format endnote-xml --out references.xml
+```
 
-## Relationship to ArtifactCert
+Start with the JSON report: it retains source records, citation instructions,
+citation-to-record links, and findings. Output files must be new; existing files
+are never overwritten. Recovery errors or findings that indicate missing or
+conflicting records prevent library export, while recoverable data remains
+available in the report.
 
-CiteBind and [ArtifactCert](https://github.com/tengzhang48/ArtifactCert) are
-**separate projects with separate repositories**, and the self-contained DOCX
-is the entire interface between them. There is no shared database, account
-system, runtime, or web service.
+Use native EndNote XML when continuing in EndNote. It preserves fields and name
+representations that other export formats may not carry. EndNote author names
+remain literal strings in the CSL mapping and require checking after import.
 
-- **CiteBind** creates, verifies, formats, and stores citations.
-- **ArtifactCert** later checks that those structures remain correct across a
-  document handoff — read-only, never editing them.
+See the [recovery guide](docs/REFERENCE_RECOVERY.md) for supported fields,
+conversion limits, exit codes, and a Word for Windows test procedure.
 
-If CiteBind structures are broken, ArtifactCert reports "Open in CiteBind to
-repair" rather than attempting to fix them. ArtifactCert must not become a
-second citation editor. Integration work does not begin until the `citebind/1`
-contract is stable (Phase 6).
+## Try a generated CiteBind document
 
-## Development phases
+```console
+python -m citebind make-spike --out sample
+python -m citebind inspect sample/spike_v1.docx
+python -m citebind diff before.docx after.docx
+```
 
-| Phase | Goal | Exit condition |
-| --- | --- | --- |
-| 0 | Contract and fixtures | The document contract fits on one page |
-| 1 | Word persistence spike | Citation identity survives save/reopen with no external library |
-| 2 | Verified reference acquisition | No stored reference depends on model-generated identity |
-| 3 | Deterministic citation and bibliography | Citations and bibliography stay mutually consistent |
-| 4 | Editing robustness and portability | Document stays usable through realistic Word editing |
-| 5 | Real-manuscript pilot | 5–10 real manuscripts complete without citation loss or drift |
-| 6 | Read-only ArtifactCert adapter | ArtifactCert inspects without modifying |
+`inspect` and `diff` check **CiteBind's own structures**. Use `recover-references`
+for EndNote/Zotero fields. The sample generator creates a new test DOCX from
+public bibliographic metadata; it does not require a private manuscript.
 
-Full detail, including per-phase task lists and the integration acceptance
-test, is in [`docs/CiteBind_PLAN_2026-08-29.md`](docs/CiteBind_PLAN_2026-08-29.md).
-The execution plan for Phase 0-1 -- task ledger, acceptance criteria, and the
-implementer/driver protocol -- is in
-[`docs/GLM_DEV_PLAN.md`](docs/GLM_DEV_PLAN.md).
+The [Word test instructions](spike/SPIKE_INSTRUCTIONS.md) cover save/reopen,
+editing, and copying citations. Current Word evidence shows that copying a
+CiteBind citation into a different document can lose its embedded reference
+data. Automatic transfer or repair is not implemented. Keep the complete source
+DOCX when sharing CiteBind records.
 
-## Current status
+## Current limits and direction
 
-Nothing is implemented. The immediate next action is the **Phase 1 persistence
-spike** and nothing else:
+- Field-based EndNote and Zotero recovery is supported; bookmark-based storage,
+  unlinked plain text citations, and other managers have limits described in the
+  recovery guide.
+- CiteBind does not edit native EndNote/Zotero fields or their library databases.
+- Rendering uses pinned IEEE and APA CSL styles through `citeproc-py`, with
+  explicit refusals for unsupported cases, including author–year disambiguation.
+- Python checks and generated fixtures do not establish compatibility with all
+  Word/add-in versions. Real Zotero document testing and Windows import/refresh
+  checks remain necessary.
 
-- embed one hard-coded, DOI-resolved reference in custom XML;
-- insert one tagged citation content control and one tagged bibliography
-  control;
-- save, close Word, reopen, and recover the reference-to-citation relationship;
-- confirm a collaborator without CiteBind can still read the document normally;
-- copy a citation cluster into a second document, and edit adjacent to a
-  cluster with Track Changes enabled.
+CiteBind is separate from ArtifactCert. A DOCX is the intended interface;
+CiteBind has no runtime dependency on ArtifactCert. The planned adapter and Word
+add-in are described in the [roadmap](docs/ROADMAP.md).
 
-That spike answers the highest-risk question — whether tagged citations and
-their embedded reference data survive real Word editing and handoff — before
-any substantial product development begins. The last two probes are pulled
-forward from Phase 4 deliberately: if content controls do not survive
-cross-document paste or Track Changes, the `citebind/1` contract itself needs
-rethinking, and that is much cheaper to learn now than after Phase 3.
+## Development and licensing
 
-## Development discipline
+See [CONTRIBUTING.md](CONTRIBUTING.md) for installation, offline tests, fixture
+provenance, and build checks, and the [document contract](docs/DOCUMENT_CONTRACT.md)
+for the two data models.
 
-- Keep CiteBind and ArtifactCert in separate repositories.
-- Do not modify ArtifactCert until Phase 6.
-- Solve one reproduced Word failure at a time.
-- Prefer replacement and simplification over accumulating mechanisms.
-- Every new state, service, or workflow step must solve an observed
-  real-document problem.
-- Keep Word-visible behavior explainable to a researcher in one sentence.
-- Always preserve the ability to export and leave the system.
+CiteBind's original code and documentation use the [MIT license](LICENSE).
+Bundled CSL styles and the locale retain **CC BY-SA 3.0**. Public reference
+fixtures have separate provenance. See [third-party notices](THIRD_PARTY_NOTICES.md).
