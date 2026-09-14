@@ -1,0 +1,7 @@
+# Consistent source/documentation line endings on every checkout.
+* text=auto eol=lf
+
+# Preserve original bytes: manifests and provenance checks hash these assets.
+/src/citebind/styles/* -text
+/spike/recordings/*.json -text
+/spike/reference_source_crossref.json -text

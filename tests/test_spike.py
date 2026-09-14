@@ -366,7 +366,7 @@ def test_r2_dual_payload_diagnosis_reaches_the_row(tmp_path):
             zout.writestr("customXml/item4.xml", z.read(citebind_part))
     step1 = resave(make_spike(tmp_path / "s1"), "step1_reopened.docx")
     # move the dual into the main role
-    (tmp_path / "dual.docx").rename(tmp_path / "spike_v1.docx")
+    (tmp_path / "dual.docx").replace(tmp_path / "spike_v1.docx")
     report = check_spike([
         tmp_path / "spike_v1.docx",
         step1,
