@@ -4,42 +4,70 @@
     {
       "url": "https://api.crossref.org/works/10.2147/prom.s8896",
       "file": "crossref-https___api.crossref.org_works_10.2147_prom.s8896.json",
-      "source": "crossref"
+      "source": "crossref",
+      "source_sha256": "2d536124a9e8d8c042a578c32266777a6665ccf79d14c62a1e0641518453d660",
+      "sha256": "2d536124a9e8d8c042a578c32266777a6665ccf79d14c62a1e0641518453d660",
+      "omitted_fields": []
     },
     {
       "url": "https://api.crossref.org/works/10.1177/29768659261469390",
       "file": "crossref-https___api.crossref.org_works_10.1177_29768659261469390.json",
-      "source": "crossref"
+      "source": "crossref",
+      "source_sha256": "6a987431b0b9d91b4374a84536169ad2bd3b05072e41f3a039055a9d885fa7ab",
+      "sha256": "2c91be60fd8179465e4ee1472d5bb60e6c5d6457739d0fab81d4dfb2501fa415",
+      "omitted_fields": [
+        "/message/abstract"
+      ]
     },
     {
       "url": "https://api.crossref.org/works/10.1103/physrevlett.116.061102",
       "file": "crossref-https___api.crossref.org_works_10.1103_physrevlett.116.061102.json",
-      "source": "crossref"
+      "source": "crossref",
+      "source_sha256": "5cc78c6643bf8ab88e55b92fee1186beef826b5c3cadb6d2c65d2a872edeb9a6",
+      "sha256": "f38c9a2be631781496c197abafe2a39d75bde9f88632b9d1a07bb664aab669da",
+      "omitted_fields": [
+        "/message/abstract"
+      ]
     },
     {
       "url": "https://api.crossref.org/works/10.22541/au.161220228.87275329/v1",
       "file": "crossref-https___api.crossref.org_works_10.22541_au.161220228.87275329_v1.json",
-      "source": "crossref"
+      "source": "crossref",
+      "source_sha256": "f8bd452ee00d94adf8324c43483c9e0a266b198b2c5203b256512ae1296b7a2f",
+      "sha256": "f8bd452ee00d94adf8324c43483c9e0a266b198b2c5203b256512ae1296b7a2f",
+      "omitted_fields": []
     },
     {
       "url": "https://api.crossref.org/works?query.bibliographic=Perspectives%20on%20electronic%20medical%20records%20adoption%3A%20electronic%20medical%20records%20%28EMR%29%20in%20outcomes%20research&rows=5&select=DOI,title,author,container-title,volume,issue,page,published",
       "file": "crossref-https___api.crossref.org_works_query.bibliographic_Perspectives_20on_20electronic_20medical_20records_20adoption_3A_20electroni-8f884e46c4a3.json",
-      "source": "crossref"
+      "source": "crossref",
+      "source_sha256": "315e69c3be824ba392993a5b540e8924df9ba540bada7305520cd7382843106d",
+      "sha256": "315e69c3be824ba392993a5b540e8924df9ba540bada7305520cd7382843106d",
+      "omitted_fields": []
     },
     {
       "url": "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi?db=pubmed&retmode=json&term=Perspectives%20on%20electronic%20medical%20records%20adoption%3A%20electronic%20medical%20records%20%28EMR%29%20in%20outcomes%20research",
       "file": "pubmed-https___eutils.ncbi.nlm.nih.gov_entrez_eutils_esearch.fcgi_db_pubmed_retmode_json_term_Perspectives_20on_20electronic_20medical-9d69fd1e92e7.json",
-      "source": "pubmed"
+      "source": "pubmed",
+      "source_sha256": "80d6c7b693b3853f2e687fab2e6d7b4e69aea12d25afa651479ea0155cdc7ebe",
+      "sha256": "80d6c7b693b3853f2e687fab2e6d7b4e69aea12d25afa651479ea0155cdc7ebe",
+      "omitted_fields": []
     },
     {
       "url": "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esummary.fcgi?db=pubmed&retmode=json&id=42130696,41525750,40598237,40119379,38222081,36722464,40198015,29444228,22578085,22915950",
       "file": "pubmed-https___eutils.ncbi.nlm.nih.gov_entrez_eutils_esummary.fcgi_db_pubmed_retmode_json_id_42130696_41525750_40598237_40119379_38222-4f51c3d8fa32.json",
-      "source": "pubmed"
+      "source": "pubmed",
+      "source_sha256": "9a3381437ab8e276d162a2a789d5b0098a33ecad70568f0a0e7009bce88a0858",
+      "sha256": "9a3381437ab8e276d162a2a789d5b0098a33ecad70568f0a0e7009bce88a0858",
+      "omitted_fields": []
     },
     {
       "url": "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esummary.fcgi?db=pubmed&retmode=json&id=22915950",
       "file": "pubmed-https___eutils.ncbi.nlm.nih.gov_entrez_eutils_esummary.fcgi_db_pubmed_retmode_json_id_22915950.json",
-      "source": "pubmed"
+      "source": "pubmed",
+      "source_sha256": "bec1c81b0167bd1b85653509f8d2c2a7ab072d8b24ea95d52017de13e0c08b47",
+      "sha256": "bec1c81b0167bd1b85653509f8d2c2a7ab072d8b24ea95d52017de13e0c08b47",
+      "omitted_fields": []
     }
   ]
 }

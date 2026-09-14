@@ -164,7 +164,7 @@ def _run(args, parser):
     if args.command == "make-spike":
         path = make_spike(args.out)
         print(f"wrote {path}")
-        print("next: follow spike/SPIKE_INSTRUCTIONS.md, then run:")
+        print("next: follow https://github.com/tengzhang48/CiteBind/blob/main/spike/SPIKE_INSTRUCTIONS.md, then run:")
         print("  python -m citebind check-spike <returned files...>")
         return 0
 

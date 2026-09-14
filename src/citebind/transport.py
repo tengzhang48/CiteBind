@@ -80,32 +80,19 @@ def classify_urlopen_error(error: Exception) -> TransportError:
     return TransportError(CODE_CONNECTION_ERROR, f"request failed: {error}")
 
 
-# FIXME(driver): the mailto is a PLACEHOLDER. Crossref routes polite-pool
-# traffic on a reachable contact address; the real one is the user's to
-# give. Flagged for the driver rather than invented (review note N1).
-#
-# ORDERING: fix this BEFORE the N3 re-record. The 2026-09-01 fixtures
-# already went out to Crossref and NCBI under a placeholder address
-# (`CiteBind-recording/0.1 (mailto:example@example.org)`); re-recording
-# while this line still reads example@example.org repeats that, and this
-# time stamps the fake contact into the manifest as provenance.
-USER_AGENT = (
-    "CiteBind/0.1 (https://github.com/tengzhang48/CiteBind; "
-    "mailto:example@example.org)"
-)
+# Identify the project without claiming a contact address nobody supplied.
+USER_AGENT = "CiteBind/0.1.0 (https://github.com/tengzhang48/CiteBind)"
 
 
 class HttpTransport:
     """Real HTTP via urllib, with a timeout. Used in production and by the
     recording script; never used by tests, which run on ReplayTransport.
 
-    The fixtures currently in spike/recordings/ did NOT come from this
-    class. They were recorded 2026-09-01 at T-12 by the recorder's own
-    urlopen under a `CiteBind-recording/0.1` User-Agent, one day before the
-    N1 consolidation put the recorder on this transport. Re-recording makes
-    the shared-path claim true by construction (review note N3); until it
-    happens, this is the path production uses and those files are artifacts
-    of a path that no longer exists."""
+    Historical recordings predate this shared transport and lack complete
+    retrieval provenance. New recordings use this class and record the actual
+    User-Agent and retrieval time; public fixtures omit publisher abstracts.
+    See spike/recordings/README.md.
+    """
 
     def __init__(self, timeout: float = 30.0):
         self.timeout = timeout
@@ -201,4 +188,3 @@ def require_non_empty(items, source: str, what: str) -> None:
             CODE_EMPTY_RESULT,
             f"{what} returned no results from {source}",
         )
-

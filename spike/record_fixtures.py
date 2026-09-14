@@ -1,4 +1,4 @@
-"""Record raw API responses as resolver fixtures. DELIBERATE LIVE ACT.
+"""Record public bibliographic metadata as resolver fixtures.
 
 This is the one place a live network request is allowed (dev plan review
 note 2026-08-31, T-08). Run it by hand, on purpose:
@@ -6,11 +6,11 @@ note 2026-08-31, T-08). Run it by hand, on purpose:
     python spike/record_fixtures.py           # refuses to overwrite
     python spike/record_fixtures.py --force   # re-record everything
 
-It fetches each target below and writes the RAW, UNMODIFIED response bytes
-into ``spike/recordings/``, plus a MANIFEST.json mapping each URL to its
-file, the UTC time its bytes were written, and the User-Agent they were
-fetched under. The raw bytes are the provenance for every downstream
-assertion — never reformat, never "clean up", never edit a recording.
+It fetches each target below through the production transport. Publisher
+abstracts are omitted from public fixtures, with source/output SHA-256 hashes
+and omitted JSON paths recorded in MANIFEST.json. Responses without abstracts
+retain their original bytes. All remaining bibliographic values are unchanged.
+The manifest also records the URL, retrieval time, and actual User-Agent.
 
 A manifest written before 2026-09-06 carries no ``retrieved_at`` or
 ``user_agent``: those fields start here and are never backfilled, because a
@@ -78,6 +78,36 @@ def fetch(url: str) -> bytes:
     return _TRANSPORT.fetch(url).body
 
 
+def prepare_fixture(body: bytes) -> tuple[bytes, dict]:
+    """Omit publisher abstracts and record exactly how a fixture was derived."""
+    data = json.loads(body)
+    omitted = []
+
+    def visit(value, path=""):
+        if isinstance(value, dict):
+            for key in list(value):
+                child = path + "/" + key.replace("~", "~0").replace("/", "~1")
+                if key == "abstract":
+                    del value[key]
+                    omitted.append(child)
+                else:
+                    visit(value[key], child)
+        elif isinstance(value, list):
+            for index, item in enumerate(value):
+                visit(item, f"{path}/{index}")
+
+    visit(data)
+    published = (
+        (json.dumps(data, ensure_ascii=True, separators=(",", ":")) + "\n").encode("utf-8")
+        if omitted else body
+    )
+    return published, {
+        "source_sha256": hashlib.sha256(body).hexdigest(),
+        "sha256": hashlib.sha256(published).hexdigest(),
+        "omitted_fields": omitted,
+    }
+
+
 def main() -> int:
     force = "--force" in sys.argv
     RECORDINGS_DIR.mkdir(parents=True, exist_ok=True)
@@ -90,12 +120,14 @@ def main() -> int:
     def record(url: str, body: bytes, source: str) -> str:
         filename = f"{source}-{slug(url)}.json"
         target = RECORDINGS_DIR / filename
-        target.write_bytes(body)  # raw bytes, unmodified
+        published, provenance = prepare_fixture(body)
+        target.write_bytes(published)
         recordings.append(
             {
                 "url": url,
                 "file": filename,
                 "source": source,
+                **provenance,
                 # stamped as the bytes hit disk. The manifest has to carry
                 # its own retrieval time: file mtimes do not survive a copy,
                 # a checkout, or a zip, and this is the provenance record.
@@ -170,12 +202,11 @@ def main() -> int:
 
     manifest = {
         "recorded_with": "spike/record_fixtures.py",
-        # the contact address these requests actually went out under, so a
-        # recording made under a placeholder mailto is visible as such
+        # Record the actual agent used for this retrieval.
         "user_agent": USER_AGENT,
         "recordings": recordings,
     }
-    manifest_path.write_text(json.dumps(manifest, indent=2) + "\n")
+    manifest_path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
     print(f"wrote {manifest_path} ({len(recordings)} recordings)")
     return 0
 

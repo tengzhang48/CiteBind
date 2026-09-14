@@ -1,24 +1,37 @@
 [build-system]
-requires = ["setuptools>=68"]
+requires = ["setuptools>=77.0.3"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "citebind"
 version = "0.1.0"
-description = "Verified references that travel with your manuscript"
+description = "Recover embedded Word references and inspect DOCX citation data"
+readme = "README.md"
+license = "MIT AND CC-BY-SA-3.0"
+license-files = ["LICENSE", "THIRD_PARTY_NOTICES.md", "LICENSES/*.txt"]
+authors = [{name = "Teng Zhang"}]
 requires-python = ">=3.11"
+keywords = ["citations", "docx", "endnote", "zotero", "bibliography"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "Programming Language :: Python :: 3",
+    "Topic :: Text Processing",
+]
 dependencies = [
     "python-docx>=1.2.0",
     "lxml>=6.1",
-    # EXACT pin, deliberately. The maintainers state the API is not yet
-    # stable, so an unpinned minor release is a live grenade under every
-    # recorded rendering. Upgrading is a decision with a test run attached,
-    # not something a fresh install does silently.
+    # Rendering behavior is tested against this exact processor version.
     "citeproc-py==0.11.1",
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=9.0"]
+dev = ["pytest>=9.0", "build>=1.2"]
+
+[project.urls]
+Repository = "https://github.com/tengzhang48/CiteBind"
+Issues = "https://github.com/tengzhang48/CiteBind/issues"
+Documentation = "https://github.com/tengzhang48/CiteBind#readme"
 
 [tool.setuptools.packages.find]
 where = ["src"]
