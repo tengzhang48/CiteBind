@@ -34,7 +34,9 @@ draws when you click inside it.
 4. **Copy into a new document.** Create a **brand-new blank document**.
    Copy a boxed **[1]** from `spike_v1.docx` and paste it into the new
    document. Save the new document as **`pasted.docx`**.
-   *(This checks what a citation becomes in a document of its own.)*
+   *(This checks whether both the citation control and its embedded reference
+   data reach the new document. The checker reports failure if only the visible
+   citation travels; a readable [1] alone does not identify its source.)*
 
 5. **Edit with Track Changes on.** Turn on **Review → Track Changes**.
    In a paragraph containing a boxed **[1]**, click right next to it and

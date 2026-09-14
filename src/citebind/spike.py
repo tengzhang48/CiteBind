@@ -182,6 +182,33 @@ def _payload_status(path: Path) -> tuple[bool, str]:
     return matches, "payload matches baseline" if matches else "payload does not match baseline"
 
 
+def _pasted_reference_status(path: Path, citations) -> tuple[bool, str]:
+    """A pasted tag alone is not evidence that its reference travelled."""
+    try:
+        payload = extract(path)
+    except NAMED_INPUT_ERRORS as error:
+        return False, f"reference data unreadable: {error}"
+    if payload is None:
+        return False, "reference data missing; a copied citation tag alone cannot recover the cited work"
+    clusters = {cluster.id: cluster for cluster in payload.citation_clusters}
+    references = {reference.id for reference in payload.references}
+    baseline = _baseline_document()
+    baseline_clusters = {cluster.id: cluster for cluster in baseline.citation_clusters}
+    baseline_references = {reference.id: reference for reference in baseline.references}
+    actual_references = {reference.id: reference for reference in payload.references}
+    for tag, _text in citations:
+        cluster_id = tag.removeprefix("citebind:citation:")
+        cluster = clusters.get(cluster_id)
+        if cluster is None or not cluster.reference_ids or not set(cluster.reference_ids) <= references:
+            return False, f"reference data does not resolve copied citation {cluster_id!r}"
+        if (cluster != baseline_clusters.get(cluster_id) or any(
+            actual_references[reference_id] != baseline_references.get(reference_id)
+            for reference_id in cluster.reference_ids
+        )):
+            return False, f"reference data for copied citation {cluster_id!r} differs from the spike baseline"
+    return True, "reference data resolves every copied citation"
+
+
 def _readability_error(path: Path) -> Optional[str]:
     """Why this file cannot be graded, or None if it can be.
 
@@ -398,7 +425,7 @@ def check_spike(paths: Sequence[Union[str, Path]]) -> SpikeReport:
         rows.append(
             ProbeRow(
                 probe="P4",
-                name="copy citation into a new blank document — control travels",
+                name="copy citation into a new blank document — citation and reference data travel",
                 verdict="FAIL",
                 detail=(
                     f"{missing_note(PASTED_NAME)}; step 4 of the "
@@ -411,16 +438,17 @@ def check_spike(paths: Sequence[Union[str, Path]]) -> SpikeReport:
         pasted_citations, _bib = _scan_file(pasted)
         nonempty = [text for _tag, text in pasted_citations if text.strip()]
         pasted_payload_state = _payload_file_exists(pasted)
+        reference_ok, reference_detail = _pasted_reference_status(pasted, pasted_citations)
         rows.append(
             ProbeRow(
                 probe="P4",
-                name="copy citation into a new blank document — control travels",
-                verdict="PASS" if nonempty else "FAIL",
+                name="copy citation into a new blank document — citation and reference data travel",
+                verdict="PASS" if len(nonempty) == len(pasted_citations) and nonempty and reference_ok else "FAIL",
                 detail=(
                     f"deciding fact in {PASTED_NAME}: {len(pasted_citations)} "
                     f"tagged citation control(s) with text(s) "
                     f"{[text for _tag, text in pasted_citations]}; "
-                    f"payload part {pasted_payload_state}"
+                    f"payload part {pasted_payload_state}; {reference_detail}"
                 ),
                 file_read=str(pasted),
             )

@@ -165,6 +165,61 @@ def make_pasted_doc(tmp_path, name="pasted.docx", with_payload=False, pristine=N
     return pasted
 
 
+def test_cross_document_paste_fails_when_reference_data_does_not_travel(tmp_path):
+    files = build_returned_files(tmp_path, pasted_with_payload=False)
+    report = check_spike(files)
+    assert row(report, "P4").verdict == "FAIL"
+    assert "reference data" in row(report, "P4").detail
+    assert not report.all_passed
+
+
+def test_cross_document_paste_rejects_tag_not_in_embedded_library(tmp_path):
+    files = build_returned_files(tmp_path, pasted_with_payload=True)
+    pasted = next(f for f in files if f.name == "pasted.docx")
+    changed = tmp_path / "changed.docx"
+
+    def change_tag(tree):
+        first_citation_sdt(tree).find(f"{q('sdtPr')}/{q('tag')}").set(
+            q("val"), "citebind:citation:UNKNOWN"
+        )
+
+    edit_document_xml(pasted, changed, change_tag)
+    changed.replace(pasted)
+    report = check_spike(files)
+    assert row(report, "P4").verdict == "FAIL"
+    assert "UNKNOWN" in row(report, "P4").detail
+
+
+def test_cross_document_paste_refuses_corrupt_payload_instead_of_trusting_tag(tmp_path):
+    files = build_returned_files(tmp_path, pasted_with_payload=True)
+    pasted = next(f for f in files if f.name == "pasted.docx")
+    from citebind.part import find_citebind_part
+
+    with zipfile.ZipFile(pasted) as z:
+        payload = find_citebind_part(z)
+        contents = {n: z.read(n) for n in z.namelist()}
+    contents[payload] = b"<broken"
+    with zipfile.ZipFile(pasted, "w", zipfile.ZIP_DEFLATED) as z:
+        for name, content in contents.items():
+            z.writestr(name, content)
+    assert row(check_spike(files), "P4").verdict == "FAIL"
+
+
+def test_cross_document_paste_detects_same_ids_with_a_different_reference(tmp_path):
+    files = build_returned_files(tmp_path, pasted_with_payload=True)
+    pasted = next(f for f in files if f.name == "pasted.docx")
+    from citebind.part import find_citebind_part
+
+    with zipfile.ZipFile(pasted) as z:
+        payload = find_citebind_part(z)
+        contents = {n: z.read(n) for n in z.namelist()}
+    contents[payload] = contents[payload].replace(BASELINE_DOI.encode(), b"10.5555/a-different-reference")
+    with zipfile.ZipFile(pasted, "w", zipfile.ZIP_DEFLATED) as z:
+        for name, content in contents.items():
+            z.writestr(name, content)
+    assert row(check_spike(files), "P4").verdict == "FAIL"
+
+
 def copy_doc(src, dst):
     with zipfile.ZipFile(src) as zin, zipfile.ZipFile(dst, "w", zipfile.ZIP_DEFLATED) as zout:
         for item in zin.infolist():
@@ -177,7 +232,7 @@ def build_returned_files(
     paste=True,
     tracked=True,
     payload_loss_at_end=False,
-    pasted_with_payload=False,
+    pasted_with_payload=True,
     include_step1=True,
     include_pasted=True,
     include_renamed=True,
@@ -480,4 +535,5 @@ def test_promised_names_match_case_insensitively(tmp_path):
     document.save(pasted)
     report = check_spike(files + [pasted])
     assert row(report, "P4").file_read.endswith("PASTED.DOCX")
-    assert row(report, "P4").verdict == "PASS"
+    assert row(report, "P4").verdict == "FAIL"
+    assert "reference data missing" in row(report, "P4").detail

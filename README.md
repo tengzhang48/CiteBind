@@ -9,21 +9,25 @@ saved, emailed, reopened on another machine, or handed to a coauthor who has
 never installed CiteBind — and every citation-to-reference relationship is
 still recoverable, with no external library, account, or sync service.
 
-> **Status: Phases 2 and 3 complete, Phase 1 unfinished.** References resolve,
-> render, and verify from Python (317 tests, on the `phase1-spike` branch). No
+> **Status: Python prototype; Word add-in not yet implemented.** References resolve,
+> render, and verify from Python. Read-only recovery of EndNote and Zotero
+> references from DOCX and reference-file exports are available. No
 > Word add-in code has been written, and Phase 1's exit condition still needs a
 > human running the spike document in Word. See
 > [§ Current status](#current-status).
 
 ## The problem
 
-Reference managers keep the library somewhere else — a local database, a cloud
-account, a plugin's private store. The manuscript holds fragile pointers into
-it. When the document travels and the library does not, citations decay:
-fields go dead, numbering drifts, metadata silently changes, and a coauthor
-without the same tool sees something different from what the author wrote.
+EndNote's Traveling Library and Zotero's Word citations already embed reference
+data in the manuscript. That data is recoverable without the complete original
+library, although exporting and importing it does not automatically reconnect
+the document's citations to a new library.
 
-CiteBind inverts that. The document *is* the library.
+CiteBind aims to make citation identity and metadata independently inspectable:
+a documented, versioned document contract; reference acquisition from named
+sources; deterministic rendering with explicit limits; and checks that the
+displayed citations agree with the embedded records. It can also recover
+existing EndNote/Zotero records while preserving their native Word fields.
 
 ## How it works
 
@@ -92,6 +96,31 @@ the selected CSL style.
 No provenance digests, permissions, approval states, or event ledger in v1.
 Fields get added only when a real, reproduced failure requires them.
 
+Recovered EndNote/Zotero data is kept in a separate `citebind-recovery/1` report.
+It is labelled **recovered, not verified** and is not silently converted into
+the stricter `citebind/1` contract.
+
+## Recover references from an existing manuscript
+
+After installing the package (`python -m pip install -e .`), run:
+
+```console
+python -m citebind recover-references manuscript.docx --out recovery.json
+python -m citebind recover-references manuscript.docx --format csl-json --out references.json
+python -m citebind recover-references manuscript.docx --format ris --out references.ris
+```
+
+The default JSON report retains original records, citation instructions,
+citation-to-record links, and recovery findings. The command reads the source
+DOCX without rewriting it and creates new output files only. BibTeX is also
+available; native EndNote records can be exported as EndNote XML. Format
+limitations are reported. A damaged supported citation prevents library export;
+the diagnostic recovery report remains available.
+
+This reads field-based citations, not a native EndNote or Zotero database. It
+does not relink citations, verify metadata against an external service, or edit
+the document's citation fields. See [formats, limitations, and Windows checks](docs/REFERENCE_RECOVERY.md).
+
 ## Scope of the first version
 
 **In scope:** journal articles resolved by DOI and/or PMID; one numeric style
@@ -147,7 +176,8 @@ selection; the `citebind/1` custom XML part; tagged content controls;
 deterministic rendering of citations and the bibliography in one numeric and
 one author–year style, with named refusals where it cannot be correct; the
 Phase 1 spike kit (`make-spike` and `check-spike`); and an `inspect` / `diff`
-CLI. 317 tests, all passing.
+CLI. Read-only EndNote/Zotero DOCX reference recovery and library-file exports
+are also implemented, separately from the verified `citebind/1` data model.
 
 **Not implemented: the add-in itself.** There is no Office.js project. The
 Python above is a resolver library and a document-inspection kit — it can write
@@ -196,6 +226,12 @@ runs, the `citebind/1` contract is not settled; it is unexamined. The
 cross-document paste and Track Changes probes are pulled forward from Phase 4
 deliberately: if content controls do not survive them, the contract itself
 needs rethinking, and that is much cheaper to learn now than after Phase 3.
+
+The returned Word paste example currently retains the citation control but
+loses its reference library. The checker now requires both the control and
+resolvable reference data for the cross-document paste probe to pass. Automatic
+repair or transfer of the missing records has not been implemented; preserving
+a citation's visible text alone is not proof of portability.
 
 ## Development discipline
 
